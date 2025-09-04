@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>6</LangVersion>
+    <TargetFramework>netframework48</TargetFramework>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <RootNamespace>IngameScript</RootNamespace>
+  </PropertyGroup>
+</Project>
+

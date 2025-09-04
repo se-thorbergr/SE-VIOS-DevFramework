@@ -1,0 +1,46 @@
+name: "Bug Report"
+description: Report a problem with VIOS core or modules
+labels: ["bug"]
+body:
+  - type: input
+    id: area
+    attributes:
+      label: Area
+      description: Core or module name (e.g., Kernel, ScreenMgr, Power)
+      placeholder: ScreenMgr
+    validations:
+      required: true
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: Describe the issue and expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps; include tick cadence and argument if relevant
+      placeholder: |
+        1. Load PB with VIOS
+        2. Set CustomData [...]
+        3. Observe LCD flicker
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Debug console text, LCD screenshots, or small GIFs
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Game branch, single/multiplayer, grid size, mod list
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: On latest main; submodules updated (git submodule update --init --recursive)
+        - label: Pre-commit hooks installed; license header present
+        - label: Reproduces on a fresh world

@@ -1,0 +1,54 @@
+name: "Module Proposal"
+description: Propose a new module compatible with IVIOSModule
+labels: ["enhancement", "module"]
+body:
+  - type: input
+    id: module_name
+    attributes:
+      label: Module name (class)
+      description: Neutral class name, e.g., PowerModule, ScreenManagerPlus
+      placeholder: AcmeAirlockModule
+    validations:
+      required: true
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Purpose & scope
+      description: What does the module do? Non-goals?
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: CustomData keys
+      description: INI sections/keys and defaults
+      placeholder: |
+        [Acme.Airlock]
+        OuterDoor=...
+        InnerDoor=...
+  - type: textarea
+    id: events
+    attributes:
+      label: Events & messages
+      description: Subscribed events, message endpoints (unicast/multicast), payload format
+  - type: textarea
+    id: ui
+    attributes:
+      label: UI/LCD output
+      description: What widgets or text will be drawn? Cadence?
+  - type: textarea
+    id: performance
+    attributes:
+      label: Performance considerations
+      description: Coroutines, pooling, budgets, expected TIC cost
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Ready for implementation?
+      options:
+        - label: Uses neutral class name; implements IVIOSModule
+          required: true
+        - label: C# 6 only; PB whitelist-safe; VRage-first
+          required: true
+        - label: CustomData documented
+          required: true

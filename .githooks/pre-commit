@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Always call the template-driven stamper first
+if [ -x "tools/add_license_header.sh" ]; then
+  ./tools/add_license_header.sh
+fi
+
+# Re-stage files that just got stamped
+mapfile -t FILES < <(git ls-files -m | grep -E '\\.cs$' || true)
+if [ ${#FILES[@]} -gt 0 ]; then
+  git add "${FILES[@]}"
+fi
+
+# Final check: any staged .cs without header?
+mapfile -t STAGED < <(git diff --cached --name-only --diff-filter=ACM | grep -E '\\.cs$' || true)
+MISSING=()
+for f in "${STAGED[@]}"; do
+  [ -f "$f" ] || continue
+  if ! head -n 12 "$f" | grep -Eq 'MIT License|Viking Industries Operating System'; then
+    MISSING+=("$f")
+  fi
+done
+
+if [ ${#MISSING[@]} -gt 0 ]; then
+  echo "Auto-stamping missing headers:"; printf ' - %s\n' "${MISSING[@]}"
+  ./tools/add_license_header.sh
+  git add "${MISSING[@]}"
+fi
+
+exit 0
