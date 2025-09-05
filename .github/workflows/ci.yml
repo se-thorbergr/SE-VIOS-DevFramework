@@ -62,16 +62,49 @@ jobs:
         run: |
           dotnet --version
           dotnet sln SE-VIOS-DevFramework.sln list
+
       - name: Restore
         shell: pwsh
         run: |
           & dotnet --version
           & dotnet restore "$Env:SOLUTION"
 
+      - name: Locate MSBuild (vswhere + fallbacks)
+        id: msbuild
+        shell: pwsh
+        run: |
+          $outPath = $Env:GITHUB_OUTPUT
+          $msbuild = $null
+          $vswhere = "${Env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+
+          if (Test-Path $vswhere) {
+            $msbuild = & $vswhere -latest -prerelease -products * -requires Microsoft.Component.MSBuild `
+                       -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
+          }
+
+          if (-not $msbuild) {
+            $cmd = Get-Command msbuild.exe -ErrorAction SilentlyContinue
+            if ($cmd) { $msbuild = $cmd.Source }
+          }
+
+          if ($msbuild) {
+            "MSBuild=$msbuild" | Out-File -FilePath $outPath -Append
+            Write-Host "Resolved MSBuild: $msbuild"
+          } else {
+            "MSBuild=" | Out-File -FilePath $outPath -Append
+            Write-Warning "MSBuild.exe not found; will fall back to 'dotnet build'."
+          }
+
       - name: Build (Release)
         shell: pwsh
         run: |
-          & "${{ steps.msbuild.outputs.MSBuild }}" "$Env:SOLUTION" /p:Configuration=$Env:CONFIGURATION /m /verbosity:minimal /restore
+          $msbuild = "${{ steps.msbuild.outputs.MSBuild }}"
+          if ([string]::IsNullOrWhiteSpace($msbuild)) {
+            Write-Host "MSBuild path not resolved — falling back to 'dotnet build'"
+            dotnet build "$Env:SOLUTION" -c "$Env:CONFIGURATION" --no-restore
+          } else {
+            & $msbuild "$Env:SOLUTION" /p:Configuration=$Env:CONFIGURATION /m /verbosity:minimal /restore
+          }
 
   policy_checks:
     name: Policy Checks (C#6/net48/Enclosure/Naming/Headers)
