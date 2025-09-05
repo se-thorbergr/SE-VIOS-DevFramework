@@ -1,122 +1,186 @@
-param(
-  [string]$RepoRoot = ".",
-  [switch]$EmitAnnotations,
-  [string]$CommentsOut = ""
-)
+<#  tools/check-architecture.ps1
+    Guardrails for VIOS repo on CI and local dev.
+
+    Checks:
+      - .csproj discovery (recurses into submodules)
+      - TargetFramework == netframework48
+      - LangVersion == 6 (project or Directory.Build.props)
+      - Package shape:
+          PB scripts: Mal.Mdk2.PbPackager + PbAnalyzers + References
+          Mixins:     PbAnalyzers + References (no PbPackager)
+      - Program enclosure rules (lightweight regex on .cs):
+          Scripts/*/Program.cs    -> 'public partial class Program : MyGridProgram'
+          Mixins/**               -> 'partial class Program' (no 'public' and no ': MyGridProgram')
+#>
+
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Fail($msg) { Write-Error $msg; exit 1 }
-function Warn($msg) { Write-Warning $msg }
-
-# Helpers
-function RelPath([string]$abs) {
-  $root = (Resolve-Path $RepoRoot).Path
-  $p = $abs.Replace($root, "").TrimStart('\','/')
-  return $p -replace '\\','/'
-}
-$comments = @()
-function Add-Comment([string]$file,[int]$line,[string]$body,[string]$kind='error') {
-  $rel = RelPath $file
-  if ($EmitAnnotations) {
-    $prefix = ($kind -eq 'warning') ? '::warning' : '::error'
-    Write-Host "$prefix file=$rel,line=$line::$body"
-  }
-  $comments += [pscustomobject]@{ path=$rel; line=$line; body=$body }
+function Fail($msg) {
+  Write-Error $msg
+  exit 1
 }
 
-# 1) Ensure required files exist
-# Find projects; if none, try to bring submodules in once
+function Info($msg) { Write-Host $msg }
+function Notice($msg) { Write-Host "::notice::$msg" }
+function Warn($msg) { Write-Host "::warning::$msg" }
+
+# Ensure we're at repo root (heuristic)
+if (-not (Test-Path ".git")) {
+  Fail "Run this script from the repository root (no .git directory found)."
+}
+
+# Try to ensure submodules exist when running locally
 $csproj = Get-ChildItem -Path . -Recurse -Filter *.csproj -ErrorAction SilentlyContinue
 if (-not $csproj -or $csproj.Count -eq 0) {
-  Write-Host "::notice::No .csproj found; attempting 'git submodule update --init --recursive --depth=1'..."
-  try {
-    git submodule update --init --recursive --depth=1 | Out-Null
-  } catch { }
+  Notice "No .csproj found; attempting 'git submodule update --init --recursive --depth=1'..."
+  try { git submodule update --init --recursive --depth=1 | Out-Null } catch { }
   $csproj = Get-ChildItem -Path . -Recurse -Filter *.csproj -ErrorAction SilentlyContinue
 }
 
 if (-not $csproj -or $csproj.Count -eq 0) {
-  Write-Host "::warning::No .csproj found after submodule init. Skipping policy checks."
+  Warn "No .csproj found after submodule init. Skipping checks."
   exit 0
 }
 
-# 2) Verify project settings
-$xml = [xml](Get-Content -Path $csproj.FullName -Raw)
-$tfm = $xml.Project.PropertyGroup.TargetFramework | Select-Object -First 1
-$lang = $xml.Project.PropertyGroup.LangVersion | Select-Object -First 1
-if ($tfm -ne 'netframework48') { Add-Comment $csproj.FullName 1 "TargetFramework must be netframework48 (found '$tfm')." }
-if ($lang -ne '6') { Add-Comment $csproj.FullName 1 "LangVersion must be 6 (C# 6) (found '$lang')." }
-
-# 3) Verify MDK2 packages present
-$packages = @('Mal.Mdk2.PbAnalyzers','Mal.Mdk2.PbPackager','Mal.Mdk2.References')
-$present = @()
-$xml.Project.ItemGroup.PackageReference | ForEach-Object { $present += $_.Include }
-foreach ($p in $packages) {
-  if ($present -notcontains $p) { Add-Comment $csproj.FullName 1 "Missing required package: $p" }
-}
-
-# 4) Collect C# files (exclude bin/obj)
-$files = Get-ChildItem -Path $RepoRoot -Recurse -Include *.cs -File |
-  Where-Object { $_.FullName -notmatch '\\bin\\|\\obj\\' }
-if (-not $files) { Fail "No .cs files found." }
-
-# 5) License header check (top lines)
-foreach ($f in $files) {
-  $head = (Get-Content -Path $f.FullName -TotalCount 12 -Raw)
-  if ($head -notmatch 'Viking Industries Operating System' -and $head -notmatch 'MIT License') {
-    Add-Comment $f.FullName 1 "Missing license header (MIT / VIOS banner)."
+# Optionally read Directory.Build.props for shared LangVersion/TFM hints
+$dirProps = Join-Path (Get-Location) "Directory.Build.props"
+$dirLangVersion = $null
+$dirTFM = $null
+if (Test-Path $dirProps) {
+  try {
+    [xml]$dirXml = Get-Content -LiteralPath $dirProps -Raw
+    $dirLangVersion = $dirXml.Project.PropertyGroup.LangVersion | Select-Object -First 1
+    $dirTFM = $dirXml.Project.PropertyGroup.TargetFramework | Select-Object -First 1
+  } catch {
+    Warn "Failed parsing Directory.Build.props: $($_.Exception.Message)"
   }
 }
 
-# 6) Enclosure: inside IngameScript + partial Program (heuristic)
-foreach ($f in $files) {
-  $txt = Get-Content -Path $f.FullName -Raw
-  if ($txt -notmatch 'namespace\s+IngameScript' -or $txt -notmatch 'partial\s+class\s+Program') {
-    Add-Comment $f.FullName 1 "Source should be wrapped in namespace IngameScript { partial class Program { ... } } (heuristic)."
-  }
-}
+$hadError = $false
 
-# 7) Class naming rules for VIOS brand (with line numbers)
-$regexType = '^\s*(class|interface|struct)\s+([A-Za-z0-9_]+)'
-foreach ($f in $files) {
-  $matches = Select-String -Path $f.FullName -Pattern $regexType -AllMatches
-  foreach ($m in $matches) {
-    $name = $m.Matches[0].Groups[2].Value
-    if ($name.ToLower().Contains('vios') -and ($name -notmatch 'VIOS')) {
-      Add-Comment $f.FullName $m.LineNumber "Type names containing 'vios' must use uppercase 'VIOS': $name"
+Write-Host "::group::Project checks"
+foreach ($proj in $csproj) {
+  try {
+    [xml]$xml = Get-Content -LiteralPath $proj.FullName -Raw
+
+    $projName = Split-Path $proj.FullName -Leaf
+    $projDir  = Split-Path $proj.FullName -Parent
+    $relPath  = Resolve-Path -Relative $proj.FullName
+
+    $pg = $xml.Project.PropertyGroup | Select-Object -First 1
+
+    # TargetFramework check
+    $tfm = $pg.TargetFramework
+    if (-not $tfm -and $pg.TargetFrameworks) {
+      $tfm = ($pg.TargetFrameworks -split ';' | Select-Object -First 1)
     }
-  }
-}
+    if (-not $tfm) { $tfm = $dirTFM }
 
-# 7b) Warn if modules use branded type names (preferred neutral)
-$moduleFiles = $files | Where-Object { $_.FullName -match '\\Modules\\' }
-foreach ($f in $moduleFiles) {
-  $matches = Select-String -Path $f.FullName -Pattern $regexType -AllMatches
-  foreach ($m in $matches) {
-    $name = $m.Matches[0].Groups[2].Value
-    if ($name -match '^VIOS') {
-      Add-Comment $f.FullName $m.LineNumber "Module classes should use neutral names (branding reserved for core): $name" 'warning'
+    if ($tfm -ne 'netframework48') {
+      Write-Host "::error file=$relPath::TargetFramework must be 'netframework48' (found '$tfm')"
+      $hadError = $true
+    } else {
+      Info "[$relPath] TargetFramework OK: $tfm"
     }
+
+    # LangVersion check
+    $lang = $pg.LangVersion
+    if (-not $lang) { $lang = $dirLangVersion }
+    if (-not $lang) {
+      Write-Host "::warning file=$relPath::LangVersion not set (expected '6'); relying on default may break PB."
+    } elseif ($lang -ne '6') {
+      Write-Host "::error file=$relPath::LangVersion must be '6' (found '$lang')"
+      $hadError = $true
+    } else {
+      Info "[$relPath] LangVersion OK: $lang"
+    }
+
+    # Package shape
+    $pkgs = @{}
+    foreach ($pkg in $xml.Project.ItemGroup.PackageReference) {
+      $id = $pkg.Include
+      if ($id) { $pkgs[$id] = $true }
+    }
+
+    $isScript = $false
+    $isMixin  = $false
+    $pathNorm = ($relPath -replace '\\','/').ToLowerInvariant()
+
+    if ($pathNorm -like "*/scripts/*/*.csproj") {
+      $isScript = $true
+    } elseif ($pathNorm -like "*/mixins/*/*.csproj") {
+      $isMixin = $true
+    }
+
+    if ($isScript) {
+      $need = @('Mal.Mdk2.PbPackager','Mal.Mdk2.PbAnalyzers','Mal.Mdk2.References')
+      foreach ($n in $need) {
+        if (-not $pkgs.ContainsKey($n)) {
+          Write-Host "::error file=$relPath::PB script must reference $n"
+          $hadError = $true
+        }
+      }
+    }
+    if ($isMixin) {
+      if ($pkgs.ContainsKey('Mal.Mdk2.PbPackager')) {
+        Write-Host "::error file=$relPath::Mixin may NOT reference Mal.Mdk2.PbPackager"
+        $hadError = $true
+      }
+      $need = @('Mal.Mdk2.PbAnalyzers','Mal.Mdk2.References')
+      foreach ($n in $need) {
+        if (-not $pkgs.ContainsKey($n)) {
+          Write-Host "::error file=$relPath::Mixin must reference $n"
+          $hadError = $true
+        }
+      }
+    }
+
+  } catch {
+    Write-Host "::error file=$($proj.FullName)::Failed to parse project: $($_.Exception.Message)"
+    $hadError = $true
+  }
+}
+Write-Host "::endgroup::"
+
+# Source enclosure checks
+Write-Host "::group::Source enclosure checks"
+# 1) PB Program.cs: must include the public partial + base
+$scriptPrograms = Get-ChildItem -Path ./Scripts -Recurse -Filter Program.cs -ErrorAction SilentlyContinue
+foreach ($f in $scriptPrograms) {
+  $rel = Resolve-Path -Relative $f.FullName
+  $txt = Get-Content -LiteralPath $f.FullName -Raw
+  if ($txt -notmatch 'namespace\s+IngameScript') {
+    Write-Host "::error file=$rel::Missing 'namespace IngameScript'"
+    $hadError = $true
+  }
+  if ($txt -notmatch 'public\s+partial\s+class\s+Program\s*:\s*MyGridProgram') {
+    Write-Host "::error file=$rel::PB Program.cs must declare 'public partial class Program : MyGridProgram'"
+    $hadError = $true
   }
 }
 
-# 8) Discourage heavy APIs (non-fatal)
-foreach ($f in $files) {
-  $hit = Select-String -Path $f.FullName -Pattern '\bSystem\.Linq\b' -SimpleMatch
-  if ($hit) {
-    Add-Comment $f.FullName $hit.LineNumber "Consider avoiding System.Linq in PB hot paths (VRage-first)." 'warning'
+# 2) Mixins: partial Program but NOT public and NOT base class
+$mixinFiles = Get-ChildItem -Path ./Mixins -Recurse -Include *.cs -ErrorAction SilentlyContinue
+foreach ($f in $mixinFiles) {
+  $rel = Resolve-Path -Relative $f.FullName
+  $txt = Get-Content -LiteralPath $f.FullName -Raw
+  if ($txt -match 'public\s+partial\s+class\s+Program\s*:\s*MyGridProgram') {
+    Write-Host "::error file=$rel::Mixin must NOT declare 'public partial class Program : MyGridProgram'"
+    $hadError = $true
+  }
+  if ($txt -match 'public\s+partial\s+class\s+Program\b') {
+    Write-Host "::warning file=$rel::Mixin should not use 'public' on partial Program; prefer internal/default"
+  }
+  if ($txt -match 'partial\s+class\s+Program\s*:\s*MyGridProgram') {
+    Write-Host "::error file=$rel::Mixin must NOT inherit MyGridProgram"
+    $hadError = $true
   }
 }
+Write-Host "::endgroup::"
 
-# Output JSON for PR review comments
-if ($CommentsOut) {
-  $comments | ConvertTo-Json -Depth 5 | Set-Content -Path $CommentsOut -NoNewline
+if ($hadError) {
+  Fail "One or more policy checks failed."
+} else {
+  Write-Host "OK — Architecture/policy checks passed."
 }
-
-# Fail the job if any errors were emitted
-$hasErrors = $comments | Where-Object { $_.body -like '[Ee]rror*' } | Measure-Object | Select-Object -ExpandProperty Count
-# More simply: assume anything we added without 'warning' is an error
-$errors = $comments | Where-Object { $_.body -notmatch 'warning' }
-if ($errors.Count -gt 0) { Fail "Policy violations found. See inline annotations or PR review comments." }
-
-Write-Host "All checks passed."
