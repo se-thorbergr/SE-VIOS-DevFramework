@@ -34,18 +34,31 @@ jobs:
           git fetch --depth=1 origin "$GITHUB_SHA"
           git checkout --progress --force "$GITHUB_SHA"
 
-      - name: Fetch submodules via HTTPS using GITHUB_TOKEN
+      - name: Fetch submodules via HTTPS using GITHUB_TOKEN (Windows-safe)
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
-          # Rewrite SSH submodule URLs to HTTPS for CI *only*
-          git config --global url."https://github.com/".insteadOf git@github.com:
+          set -euo pipefail
+
+          # 1) Rewrite SSH → HTTPS inside .gitmodules (CI-only)
+          if [ -f .gitmodules ]; then
+            sed -i 's#git@github.com:#https://github.com/#g' .gitmodules
+          fi
+
+          # 2) Sync submodule configs from .gitmodules to .git/config
           git submodule sync --recursive
-          git -c protocol.version=2 \
-              -c http.extraheader="AUTHORIZATION: bearer $GITHUB_TOKEN" \
-              submodule update --init --recursive --depth=1
+
+          # 3) Globally force HTTPS for any lingering ssh forms (both patterns)
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+
+          # 4) (Critical) Set an auth header that ALL https://github.com requests will use
+          #    This works better than per-command -c on Windows when submodule clones spawn.
+          git config --global http.https://github.com/.extraheader "AUTHORIZATION: bearer ${GITHUB_TOKEN}"
+
+          # 5) Initialize & update recursively
+          git submodule update --init --recursive --depth=1
 
       - name: List solution projects (debug)
         shell: bash
