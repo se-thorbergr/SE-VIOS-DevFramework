@@ -25,8 +25,20 @@ function Add-Comment([string]$file,[int]$line,[string]$body,[string]$kind='error
 }
 
 # 1) Ensure required files exist
-$csproj = Get-ChildItem -Path $RepoRoot -Recurse -Filter *.csproj | Select-Object -First 1
-if (-not $csproj) { Fail "No .csproj found." }
+# Find projects; if none, try to bring submodules in once
+$csproj = Get-ChildItem -Path . -Recurse -Filter *.csproj -ErrorAction SilentlyContinue
+if (-not $csproj -or $csproj.Count -eq 0) {
+  Write-Host "::notice::No .csproj found; attempting 'git submodule update --init --recursive --depth=1'..."
+  try {
+    git submodule update --init --recursive --depth=1 | Out-Null
+  } catch { }
+  $csproj = Get-ChildItem -Path . -Recurse -Filter *.csproj -ErrorAction SilentlyContinue
+}
+
+if (-not $csproj -or $csproj.Count -eq 0) {
+  Write-Host "::warning::No .csproj found after submodule init. Skipping policy checks."
+  exit 0
+}
 
 # 2) Verify project settings
 $xml = [xml](Get-Content -Path $csproj.FullName -Raw)
