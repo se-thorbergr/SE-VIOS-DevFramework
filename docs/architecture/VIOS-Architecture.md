@@ -1,508 +1,409 @@
-# VIOS — Viking Industries Operating System (SE/MDK²) — Architecture v0.1 (Naming Rule Applied)
+# VIOS Architecture (Long Form)
 
-> Target: **Space Engineers Programmable Block** (MDK²-SE), **netframework48**, **C# 6**, **VS Code**. All generated code (except `using`) must live inside `namespace IngameScript { partial class Program { /* … */ } }`.
->
-> **Naming rule (added):** The operating system name **VIOS** must be uppercase in all **class/interface/struct** names (e.g., `VIOSKernel`, `IVIOSModule`, `VIOSPacket`, `VIOSContext`). Variables/fields may use lowercase `vios`.
+**Product:** Viking Industries Operating System (**VIOS**)
+**Context:** Space Engineers Programmable Block • MDK²‑SE • VS Code
+**Version:** v0.1.1 (naming rule applied; MDK² project layout aligned)
 
----
-
-## 1) Goals & Hard Constraints
-
-* **SE/MDK²-SE**: Favor *VRage* APIs over general .NET where possible (e.g., `IMyTextSurface`, `MySprite`, `IMyIntergridCommunicationSystem`).
-* **Safety**: Top-level `try/catch` around `Main()` tick driver; display errors on Debug LCD.
-* **Ticks & Budgets**: Track **TIC** (`Runtime.CurrentInstructionCount`) and **Call Depth** (`Runtime.CurrentCallChainDepth`) and yield at configurable thresholds.
-* **Coroutine-First**: Extensive coroutine/state-machine scheduling to spread work across ticks.
-* **Pooling/Queuing**: Reuse buffers and objects aggressively; central pools for messages, packets, sprites, strings.
-* **Events/Messages**: Unified EventBus & MessageRouter for local (host/LAN) and inter-grid (WAN via IGC) with unicast/multicast/broadcast.
-* **Time & Cycles**: Record UTC (`DateTime.UtcNow`) per tick & per event.
-* **Mixins**: Core lives in **Mixins/VIOS/**; PB scripts are thin bootstraps in **Scripts/**; user extensions in **Modules/**.
-* **Naming**: **VIOS** uppercase in class/interface/struct names; variables may use lowercase `vios`.
+> This is the **canonical architecture reference** for contributors and Codex. It captures the complete scope: kernel, scheduler, router, UI, storage, pools, stats, modules, repository layout, and diagrams.
 
 ---
 
-## 2) Repository Layout (MDK²-SE multi-project)
+## 1. Mission, Non‑Goals, Principles
+
+**Mission.** Provide a small, robust OS‑style framework running inside a single SE Programmable Block that offers:
+
+- A **Kernel** with lifecycle orchestration and module registry.
+- A **Coroutine Scheduler** to slice work across ticks under instruction/call‑depth budgets.
+- A unified **Message/Event Router** for local + IGC traffic (unicast/multicast/broadcast).
+- Basic **UI widgets** on LCDs with configurable layouts and cadence.
+- **Persistence** via PB `Storage` and configuration via `Me.CustomData` (`MyIni`).
+- A stable **Module API** so third parties can add features without forking core.
+
+**Non‑Goals.** Heavy serialization, reflection, dynamic code loading, background threads, or anything outside the PB whitelist. Multiplayer state sync beyond best‑effort messaging is out of scope.
+
+**Design Principles.** C# 6 / net48; VRage‑first APIs; deterministic ticks; cooperative concurrency; zero GC in hot paths; neutral module names; **VIOS uppercase** in type names containing the OS; variables may be `vios` lowercase.
+
+---
+
+## 2. MDK² Hard Constraints & Enclosure Rule
+
+1. **Enclosure (MDK² rule):** All generated code (except `using`) must be inside:
+
+```csharp
+namespace IngameScript
+{
+    partial class Program
+    {
+        // generated code here
+    }
+}
+```
+
+2. **Targets & Packages:** `netframework48`, `LangVersion=6`. PB script projects include `Mal.Mdk2.PbPackager`, `Mal.Mdk2.PbAnalyzers`, and `Mal.Mdk2.References`. Mixin projects include `PbAnalyzers` + `References` only.
+3. **SE/MDK²-SE (VRage-first):** Favor _VRage_ APIs over general .NET where possible (e.g., `IMyTextSurface`, `MySprite`, `IMyIntergridCommunicationSystem`, `MyIni`).
+4. **Safety:** Wrap the top-level PB driver (`Main()`/kernel dispatcher) in `try/catch`; echo concise errors and optionally display on a Debug LCD surface.
+5. **Ticks & Budgets:** Track **TIC** (`Runtime.CurrentInstructionCount`) and **Call Depth** (`Runtime.CurrentCallChainDepth`) and **yield** at configurable thresholds (Soft/Hard TIC and MaxDepth read from `CustomData`).
+6. **Coroutine‑First:** Use coroutine/state‑machine scheduling extensively to spread work across ticks; heavy scans must be sliced.
+7. **Pooling/Queuing:** Reuse buffers/objects aggressively; provide central pools for messages/packets/sprites/strings; use bounded queues with drop‑oldest on overflow.
+8. **Events/Messages:** Maintain a unified EventBus & MessageRouter for local (host/LAN) and inter‑grid (WAN via IGC) with unicast/multicast/broadcast.
+9. **Time & Cycles:** Record UTC (`DateTime.UtcNow`) per tick and per event for diagnostics and scheduling.
+10. **Mixins Layout:** Core lives under **Mixins/VIOS.Core**; PB scripts are thin bootstraps in **Scripts/**; user extensions live in **Mixins/Modules/** (neutral names) and **Mixins/Components/**.
+11. **Naming:** **VIOS** must be uppercase in any class/interface/struct names containing the OS name; variables may use lowercase `vios`. **Modules/Components** keep **neutral** class names (no `VIOS` prefix) while implementing branded interfaces.
+12. **UI Cadence:** LCD drawing is throttled (default `Update10`) and budget‑aware; avoid redundant `DrawFrame` work.
+13. **Persistence & Config:** Use PB `Storage` for state and `Me.CustomData` (via `MyIni`) for configuration.
+14. **Whitelist Compliance:** Use only PB‑allowed APIs; avoid LINQ/allocations in hot paths and any forbidden namespaces.
+
+---
+
+## 3. Repository & Project Layout (MDK² — Detailed Canonical)
 
 ```
 <root>/
-├─ Scripts/
-│  ├─ VIOS.Bootstrap/              # Programmable Block Script (thin): Program.cs
-│  │  └─ Program.cs                # Instantiates VIOS from Mixins
-│  └─ <OtherProject>/
-├─ Mixins/
-│  └─ VIOS/
-│     ├─ VIOS.cs                   # Kernel + composition root (partial Program wrapper)
-│     ├─ Env.cs                    # Environment adapter (GTS, Me, Runtime, IGC)
-│     ├─ Scheduler.cs              # Coroutine scheduler & yields
-│     ├─ Events.cs                 # Events & handlers
-│     ├─ Messaging.cs              # Router, address, packet, codecs
-│     ├─ Pools.cs                  # Pooling infra
-│     ├─ UI/Console.cs             # Debug/status console (IMyTextSurface)
-│     ├─ UI/Widgets.cs             # Widgets: header/footer, spinner, progress, list, table, 2d-diagram
-│     ├─ Storage.cs                # Save()/Load() + MyIni-based config
-│     ├─ Modules.cs                # Module base + registry + callbacks
-│     └─ Stats.cs                  # Counters, TIC, depth, per-tick timestamps
-├─ Components/
-│  ├─ Discovery/
-│  ├─ Screen/
-│  ├─ Network/
-│  └─ ...
-└─ Modules/
-   ├─ Basic/
-   │  ├─ Power/
-   │  ├─ Oxygen/
-   │  ├─ Hydrogen/
-   │  ├─ BlockDiscovery/
-   │  ├─ Conveyor/
-   │  ├─ ScreenMgr/
-   │  ├─ SpriteHUD/
-   │  ├─ Door/
-   │  ├─ Light/
-   │  ├─ Sound/
-   │  └─ Docking/
-   └─ Complex/
-      ├─ Airlock/
-      ├─ Cargo/
-      └─ Production/
+├─ SE-VIOS-DevFramework.sln                 # Solution wiring PB + mixins (optional but recommended)
+├─ Directory.Build.props                    # Enforce net48 + C#6 + IngameScript root namespace
+├─ .editorconfig                             # Coding style (indentation, C#6 hints)
+├─ .gitignore
+├─ README.md                                 # CI badge + quick start
+├─ LICENSE / NOTICE / TRADEMARK.md
+│
+├─ Scripts/                                  # mdk2pbscript (thin PB bootstraps you paste into SE)
+│  ├─ VIOS.Bootstrap/
+│  │  ├─ Program.cs                          # PB driver only – constructs kernel, registers modules
+│  │  └─ VIOS.Bootstrap.csproj               # Includes PbPackager + Analyzers + References
+│  └─ VIOS.DevSandbox/ (optional)
+│     └─ VIOS.DevSandbox.csproj
+│
+├─ Mixins/                                   # mdk2mixin (reusable source merged into PB at build)
+│  ├─ VIOS.Core/                             # Branded core types only
+│  │  ├─ VIOS.Core.csproj                    # Analyzers + References (no packager)
+│  │  ├─ VIOS.cs                             # Kernel + composition root
+│  │  ├─ Env.cs                              # PB environment adapter
+│  │  ├─ Scheduler.cs                        # Coroutine scheduler
+│  │  ├─ Messaging.cs                        # Address/Packet/Router
+│  │  ├─ Events.cs                           # Event bus primitives (optional split)
+│  │  ├─ Pools.cs                            # Pools & queues
+│  │  ├─ Storage.cs                          # MyIni + Storage helpers
+│  │  ├─ Modules.cs                          # Module registrar + lifecycles
+│  │  ├─ Stats.cs                            # Counters
+│  │  └─ UI/
+│  │     ├─ Console.cs                       # Text console abstraction
+│  │     └─ Widgets.cs                       # Spinner, progress, tables, charts
+│  │
+│  ├─ Components/                            # Neutral building blocks (each as its own mixin)
+│  │  ├─ Discovery/
+│  │  │  └─ Discovery.csproj                 # Grid scan helpers, block finders (VRage-first)
+│  │  ├─ Screen/
+│  │  │  └─ ScreenPrimitives.csproj          # Draw helpers (glyph layout, column calc)
+│  │  └─ Network/
+│  │     └─ LightNameService.csproj          # Best-effort discovery + name registry
+│  │
+│  └─ Modules/                               # Neutral feature modules (each as its own mixin)
+│     ├─ Power/
+│     │  ├─ PowerModule.csproj
+│     │  └─ PowerModule.cs
+│     ├─ ScreenMgr/
+│     │  ├─ ScreenManagerModule.csproj
+│     │  └─ ScreenManagerModule.cs
+│     └─ (Airlock|Cargo|Production)/...
+│
+├─ ThirdParty/                               # Optional vendor mixins (git submodules)
+│  └─ <Vendor>.<Module>/
+│     └─ <Vendor>.<Module>.csproj
+│
+├─ docs/
+│  ├─ architecture/
+│  │  └─ VIOS-Architecture.md                # Canonical architecture (this file)
+│  ├─ prompts/
+│  │  └─ VIOS-Prompt-Reusable.md             # New-chat template for Codex/GPT
+│  ├─ policies/
+│  │  └─ VIOS-Branding-Extension-Policy.md
+│  └─ steam/
+│     └─ Workshop-Description.md
+│
+├─ codex/
+│  ├─ tasks/                                 # Seed tasks T-001…T-004 for Codex sessions
+│  └─ checklists/
+│     └─ PR-acceptance.md
+│
+├─ tools/
+│  ├─ license_header.tmpl                    # Single-source header template
+│  ├─ add_license_header.sh                  # Bash stamper (reads the template)
+│  ├─ Add-LicenseHeader.ps1                  # PowerShell stamper (reads the template)
+│  └─ check-architecture.ps1                 # CI guardrails (TFM/LangVersion/naming/enclosure)
+│
+├─ .githooks/
+│  ├─ pre-commit                             # Calls stampers; re-stages changed files
+│  └─ pre-commit.ps1
+│
+└─ .github/
+   ├─ workflows/
+   │  └─ ci.yml                              # Build + checks + PR review comments + PR checklist gate
+   ├─ ISSUE_TEMPLATE/
+   │  ├─ bug_report.yml                      # Bug template
+   │  └─ module_proposal.yml                 # Module proposal template
+   ├─ pull_request_template.md               # Synced with CONTRIBUTING checklist
+   └─ CODEOWNERS
 ```
 
-> **Note:** In the compiled PB script, all types are nested inside `partial class Program`. Mixins supply source that the MDK packager merges into the final `Program.cs` under the `IngameScript` namespace.
+### 3.1 Project Types & Wiring (recap)
+
+- **PB scripts** under `Scripts/` are **`mdk2pbscript`** and include `PbPackager` + `PbAnalyzers` + `References`.
+- **Core/Modules/Components** under `Mixins/` are **`mdk2mixin`** and include `PbAnalyzers` + `References` only.
+- PB scripts **reference** mixins via `<ProjectReference/>`; the packager merges sources into the final PB output.
+
+### 3.2 Dependency Rules
+
+- `Scripts/*` → may reference: `Mixins/VIOS.Core`, any `Mixins/Modules/*`, any `Mixins/Components/*`.
+- `Mixins/VIOS.Core` → may reference: specific `Components` (avoid cyclic deps); **must not** reference modules.
+- `Mixins/Modules/*` → may reference: `VIOS.Core` and **specific** `Components` they need; **must not** reference other modules directly (communicate via router/events).
+- `Mixins/Components/*` → must be leaf libraries (no references to modules); can be reused by core or modules.
+
+### 3.3 Branding & Naming in Layout
+
+- Only **Core** uses the **VIOS** brand in type names; `Mixins/VIOS.Core` project name is acceptable.
+- **Modules/Components** use **neutral** project and type names (e.g., `PowerModule`, `ScreenManagerModule`).
+
+### 3.4 Build & CI Assumptions
+
+- Solution file lists the PB + mixins projects; CI builds the solution with MSBuild in **Release**.
+- `tools/check-architecture.ps1` is the single source for policy checks (enclosure, net48/C#6, headers, naming, PB whitelist hints).
 
 ---
 
-## 3) Core Concepts & Interfaces
+## 4. Layered Overview & Responsibilities
 
-### 3.1 Environment & Bootstrap
+- **VIOSKernel** (branded)
 
-* **Environment** abstracts `GridTerminalSystem`, `Echo`, `Me`, `Runtime`, `IGC`, default console/debug surfaces.
-* **Bootstrap** (in PB `Program()`) wires *Environment → Kernel (VIOS)*, registers modules, sets initial `UpdateFrequency`.
+  - Orchestrates lifecycle: `Init → Register → Start → Tick → Save`.
+  - Owns singletons: **CoroutineScheduler**, **MessageRouter**, **ModuleRegistry**, **Stats**, **Console/UI**, **Config**.
+  - Computes budgets per tick and enforces them across subsystems.
 
-```csharp
-namespace IngameScript {
-  partial class Program {
-    // Minimal signatures (C# 6-friendly). Implementations live in Mixins.
+- **CoroutineScheduler**
 
-    interface IVIOSKernel {
-      void Init(IEnv env, IConfig config);
-      void RegisterModule(IVIOSModule module);
-      void Start(UpdateFrequency freq);
-      void Tick(UpdateType type, string argument); // called from Main()
-      void Save();
-    }
+  - Cooperative, allocation‑free once running.
+  - Enforces **TIC soft/hard** and **MaxCallDepth**; offers `Start/Stop/Tick`.
 
-    interface IEnv {
-      IMyGridProgramRuntimeInfo Runtime { get; }
-      IMyGridTerminalSystem GTS { get; }
-      IMyProgrammableBlock Me { get; }
-      IMyIntergridCommunicationSystem IGC { get; }
-      Action<string> Echo { get; }
-      IMyTextSurface Console { get; }
-      List<IMyTextSurface> DebugSurfaces { get; }
-      DateTime UtcNow { get; }
-      void SetUpdateFrequency(UpdateFrequency f);
-    }
+- **Message Router**
 
-    interface IConfig {
-      int TicBudgetSoft { get; }    // e.g. 30_000
-      int TicBudgetHard { get; }    // e.g. 45_000 -> force yield
-      int CallDepthMax { get; }     // safety (e.g. 50)
-      int QueueMax { get; }
-      string NetworkTag { get; }    // e.g. "VIOS"
-      // ... loaded from CustomData via MyIni
-    }
-  }
-}
-```
+  - Local event queue + IGC adapter.
+  - Simple addressing (`VIOSAddress`) and **packet** (`VIOSPacket`) with endpoint string + compact payload.
+  - Unicast/multicast/broadcast; bounded queues with drop‑oldest semantics.
 
-### 3.2 Scheduler & Coroutines
+- **UI Subsystem**
 
-* **Single-threaded** cooperative multitasking via `IEnumerator<VIOSYield>`.
-* **Yields**: `Now` (voluntary), `UntilTick`, `UntilTimeUtc`, `UntilEvent`, `UntilMessage`, `WaitForBlock`, etc.
-* **Budget-aware**: scheduler stops when TIC ≥ soft limit or any time ≥ hard limit or depth beyond max.
+  - Renders header/footer/status and basic widgets on one or more LCD surfaces.
+  - **ScreenMgr** module coordinates surfaces & cadence; core provides drawing primitives.
+
+- **Persistence/Config**
+
+  - `MyIni` over `Me.CustomData` for config.
+  - PB `Storage` for compact state strings.
+
+- **Modules & Components**
+
+  - **Modules:** neutral class names implementing `IVIOSModule` (e.g., Power, ScreenMgr).
+  - **Components:** small neutral building blocks (discovery, naming, screen primitives) consumed by core/modules.
+
+---
+
+## 5. Core Types (interfaces)
+
+> All inside `IngameScript.Program`.
 
 ```csharp
-namespace IngameScript {
-  partial class Program {
-    struct VIOSYield {
-      public int Kind;   // 0=Now,1=Tick,2=Time,3=Event,4=Message
-      public long A;     // generic payload (e.g., targetTick, unixMs)
-      public int B;      // aux
-    }
+using System; using System.Text; using System.Collections.Generic;
+using Sandbox.ModAPI.Ingame; using VRage.Game; using VRage.Game.GUI.TextPanel;
 
-    interface ICoroutine { bool Step(VIOSContext ctx, out VIOSYield next); }
+namespace IngameScript { partial class Program {
 
-    interface IScheduler {
-      void Enqueue(ICoroutine c);
-      int Pending { get; }
-      void Tick(VIOSContext ctx); // advances while under TIC/call-depth budgets
-    }
-
-    struct VIOSContext {
-      IEnv Env; IConfig Cfg; IEventBus Events; IMessageRouter Router; IStats Stats; IPools Pools;
-    }
+  // Context passed to modules & subsystems
+  struct VIOSContext {
+    public IEnv Env; public IConfig Config; public IStats Stats;
+    public IMessageRouter Router; public ICoroutineScheduler Scheduler;
   }
-}
-```
 
-### 3.3 Events & Messages
+  interface IVIOSKernel { void Init(IEnv env, IConfig cfg); void RegisterModule(IVIOSModule m);
+    void Start(UpdateFrequency f); void Tick(UpdateType u, string arg); void Save(); }
 
-* **Events**: local, intra-host notifications (e.g., `Tick`, `Argument`, `BlockAdded`, `ConfigChanged`).
-* **Messages**: addressable packets for unicast/multicast/broadcast across *Host → LAN → WAN (IGC)*.
-
-```csharp
-namespace IngameScript {
-  partial class Program {
-    struct Event { ushort Type; int A; int B; object Payload; DateTime Utc; UpdateType Source; }
-
-    interface IEventBus {
-      void Publish(ref Event e);
-      void Subscribe(ushort type, IEventHandler h);
-    }
-
-    interface IEventHandler { void OnEvent(ref Event e, VIOSContext ctx); }
-
-    struct VIOSAddress { byte Scope; string Host; string Module; ushort Endpoint; }
-    struct VIOSPacket { VIOSAddress Src, Dst; ushort Kind; byte Ttl; int Seq; string Data; }
-
-    interface IMessageRouter {
-      void Unicast(ref VIOSPacket p);
-      void Broadcast(ref VIOSPacket p, byte scope);       // host/lan/wan
-      void Multicast(ref VIOSPacket p, string groupName); // logical groups
-      void Pump(VIOSContext ctx); // poll IGC listeners + local queues
-    }
+  interface IVIOSModule {
+    string Name { get; }
+    void Init(VIOSContext ctx, IModuleRegistrar reg);
+    void Start(VIOSContext ctx);
+    void Tick(VIOSContext ctx);
+    void Stop(VIOSContext ctx);
+    void OnMessage(ref VIOSPacket p, VIOSContext ctx);
+    void DescribeStatus(StringBuilder sb);
   }
-}
-```
 
-### 3.4 Pools & Queues
+  interface IModuleRegistrar { void Subscribe(string endpoint, IMessageHandler h); void SubscribeIGC(string endpoint, IMessageHandler h); }
+  interface IMessageHandler { void Handle(ref VIOSPacket p, VIOSContext ctx); }
 
-* **Object pools** for `Event`, `VIOSPacket`, `StringBuilder`, sprite lists, etc.
-* **Queues**: ring-buffer style, configurable caps (drop oldest on overflow → metric).
+  // Messaging
+  struct VIOSAddress { public long Id; public byte Scope; /*0=host,1=LAN,2=WAN*/ }
+  struct VIOSPacket { public VIOSAddress To, From; public string Endpoint; public string Payload; public int Flags; }
 
-```csharp
-namespace IngameScript {
-  partial class Program {
-    interface IPool<T> { T Take(); void Return(T item); int Count { get; } }
-    interface IPools { IPool<Event> Events { get; } IPool<VIOSPacket> Packets { get; } /* … */ }
+  interface IMessageRouter {
+    void Configure(string tag); // IGC tag
+    void EnqueueLocal(ref VIOSPacket p);
+    void EnqueueOutbound(ref VIOSPacket p);
+    bool TryDequeueLocal(out VIOSPacket p);
+    bool TryDequeueInbound(out VIOSPacket p);
+    void Pump(VIOSContext ctx, int budgetInstructions);
   }
-}
-```
 
-### 3.5 UI / Console / Widgets
-
-* **Console**: Me’s surface (or dedicated LCD) with standardized **header + body + footer** (ship/station & block name, UTC ISO, status, stats).
-* **Widgets**: spinner, progress, 2D diagram (sparklines), lists, tables.
-* **Layouts** configurable via `CustomData` (compatible with **MMaster’s Automatic LCDs 2** style sections/keys).
-
-```csharp
-namespace IngameScript {
-  partial class Program {
-    interface IConsole { void WriteStatus(VIOSContext ctx); void Draw(VIOSContext ctx); }
-    interface IWidget { void Render(IMyTextSurface s, ref MySpriteDrawFrame f, in WidgetData d); }
-    struct WidgetData { /* layout rects, text, values */ }
+  // Scheduler
+  struct CoroutineId { public int Value; }
+  interface ICoroutine { bool MoveNext(); }
+  interface ICoroutineScheduler {
+    CoroutineId Start(ICoroutine c); void Stop(CoroutineId id);
+    void Tick(VIOSContext ctx, int softBudget, int hardBudget, int maxDepth);
+    int ActiveCount { get; }
   }
-}
-```
 
-### 3.6 Storage & Config
+  // Environment & config
+  interface IEnv { IMyProgrammableBlock Me { get; } IMyGridProgramRuntimeInfo Runtime { get; }
+    IMyGridTerminalSystem GTS { get; } IMyIntergridCommunicationSystem IGC { get; }
+    Action<string> Echo { get; } DateTime UtcNow { get; } IMyTextSurface DebugSurface { get; } }
 
-* **Config** via `MyIni` in `Me.CustomData` (layout compatible with ALCDs2 sections).
-* **Persistence** via PB `Storage` and optional `CustomData` snapshots.
+  interface IConfig { bool TryGet(string s, string k, out string v);
+    int GetInt(string s, string k, int d); bool GetBool(string s, string k, bool d);
+    string GetString(string s, string k, string d); }
 
-```csharp
-namespace IngameScript {
-  partial class Program {
-    interface IStorage { void Load(); void Save(); MyIni Ini { get; } }
-  }
-}
-```
+  interface IStats { int LastTic; int MaxTic; int LastDepth; int MaxDepth; int MsgIn; int MsgOut; int Dropped; int Coroutines; int Yields; }
 
-### 3.7 Modules (Extensible)
-
-* **Lifecycle**: `Init` → `Start` → `Update/Tick` → `Stop`.
-* **Capabilities**: register event handlers, coroutines, console widgets, and message endpoints.
-* **Callbacks**: module-to-module interaction via typed callbacks or message RPC.
-
-```csharp
-namespace IngameScript {
-  partial class Program {
-    interface IVIOSModule {
-      string Name { get; }
-      void Init(VIOSContext ctx, IModuleRegistrar reg);
-      void Start(VIOSContext ctx);
-      void Tick(VIOSContext ctx); // light work; heavy work via coroutines
-      void Stop(VIOSContext ctx);
-      void OnMessage(ref VIOSPacket p, VIOSContext ctx);
-      void DescribeStatus(StringBuilder sb); // for footer + debug
-    }
-
-    interface IModuleRegistrar {
-      void OnEvent(ushort type, IEventHandler handler);
-      void Endpoint(ushort endpointKind, IVIOSModule module);
-      void Coroutine(ICoroutine c);
-      void Widget(IWidget w);
-    }
-  }
-}
+}} // ns/class
 ```
 
 ---
 
-## 4) Data Flow & Tick Pipeline
+## 6. Kernel Lifecycle & Tick Pipeline
 
-**Main() (PB) → Kernel.Tick():**
+**Init**
 
-1. **Collect**: Update type, argument, UTC timestamp, TIC & call-depth snapshot.
-2. **Guardrails**: Abort/early-yield if `Runtime.CurrentCallChainDepth` > `CallDepthMax`.
-3. **Pump IGC**: `MessageRouter.Pump()` to collect incoming WAN/LAN packets (pooled) → enqueue local deliveries.
-4. **Raise Events**: standard `Tick` + `Argument` events.
-5. **Run Scheduler**: progress coroutines until **soft TIC** limit.
-6. **Module Ticks**: `module.Tick()` (budgeted per-module micro-slices).
-7. **UI/Console**: draw once per `Update10` (configurable) to keep TIC low.
-8. **Defer Save**: on `Update100` or on-demand; flush pools.
+- Capture `IEnv`, create `IConfig` (MyIni), construct **Router**, **Scheduler**, **Stats**, **Console/UI**.
+- Prepare **ModuleRegistry** and pass a `VIOSContext` to each `Init`.
 
----
+**Register**
 
-## 5) Messaging & Addressing
+- Modules subscribe to message endpoints via `IModuleRegistrar`.
+- Parse `CustomData` for module‑specific config; enqueue heavy discovery as coroutines.
 
-* **Scopes**:
+**Start**
 
-  * `0 = Host (localhost)` – delivery within this PB (in-process dispatch).
-  * `1 = LAN (local mechanically/connector-linked grids)` – IGC broadcast with `NetworkTag` + group/cluster hints.
-  * `2 = WAN (inter-grid, detached)` – IGC broadcast/unicast by PB entity ID.
-* **Address**: `VIOSAddress { Scope, HostName, ModuleName, Endpoint }`.
-* **Packet**: `VIOSPacket { Src, Dst, Kind, Ttl, Seq, Data }`; *Data* is a compact string (INI-like or delimited), avoiding heavy serializers.
-* **Groups / Multicast**: Named lists maintained via discovery beacons; join/leave with broadcasts.
-* **Name Service**: lightweight DNS-like registry: modules announce `Name → Address` on boot; queries are broadcast with exponential backoff.
+- Kernel sets `Runtime.UpdateFrequency` (default `Update10 | Update100`).
+- Subscribes to IGC with selected tag (default `VIOS`).
 
----
+**Tick(update, arg)**
 
-## 6) UI Layout & Widgets
+1. Capture **UTC**, **TIC**, **Depth**; compute **Soft/Hard budgets** and **MaxDepth**.
+2. `Router.Pump` to drain inbound IGC, then local queue (bounded).
+3. `Scheduler.Tick` until soft budget; never exceed hard budget.
+4. `Module.Tick` (lightweight only; long work belongs to coroutines).
+5. Every N ticks (e.g., Update100), write Echo + optional Debug LCD status (`Stats`, UTC, modules).
+6. If exception: catch at PB driver, surface message, and attempt graceful recovery.
 
-* **Header**: `<GridName>/<ShipName> :: <PB Name>    <UTC ISO>    <UpdateFreq>`
-* **Body**: regioned grid for widgets (CustomData layout: rows/cols, spans).
-* **Footer**: status line: `TIC:cur/soft/hard  Depth:cur/max  Q:msg/coro  Mod:<active>/<total>  Net:rx/tx`
+**Save**
 
-Widgets include: **Spin**, **Progress**, **Sparkline(2D)**, **List**, **Table**, **Block Stats**.
+- Ask modules to write compact state strings; persist to PB `Storage`.
 
----
-
-## 7) Module Library (Base → Extensible)
-
-**Basic Modules (inherit `VIOSModuleBase`)**
-
-* **Power**: scanners for `IMyBatteryBlock`, `IMyReactor`, `IMySolarPanel`, `IMyHydrogenEngine`; expose producers/consumers; compute reserves.
-* **Oxygen**/**Hydrogen**: `IMyGasGenerator`, tanks, O2/H2 farm stats.
-* **Block Discovery**: indexed lookups by subtype/type; caching with dirty flags.
-* **Conveyor**: graph traversal of conveyor network (lightweight; incremental via coroutine).
-* **ScreenMgr**: multi-surface management; mosaic across connected surfaces.
-* **SpriteHUD**: cockpit overlays with `DrawFrame` (when seated).
-* **Door/Light/Sound/Docking**: declarative control via CustomData profiles & events.
-
-**Complex Modules**
-
-* **Airlock**: finite-state machine across paired doors, pressure sensors, indicators, interlock/callbacks.
-* **Cargo**: inventory balancing, stock thresholds, pull/push jobs (queued coroutines).
-* **Production**: assembler/refinery job queues, power-aware throttling.
-
----
-
-## 8) Safety & Performance Strategy
-
-* **Budgets**: soft TIC (cooperative yield), hard TIC (immediate stop of scheduler), max call depth.
-* **Work Slicing**: large scans split into *chunks per tick* using enumerator coroutines.
-* **Pooling**: fixed-size pools; on exhaustion, drop non-critical work and log once per N ticks.
-* **Drawing Cadence**: at most once per `Update10` unless explicitly requested.
-* **IGC Backpressure**: outbound queue caps; TTL decrement; drop & metric.
-
----
-
-## 9) Minimal Code Skeleton (C# 6; **signatures only**) — *to be placed under* `IngameScript.Program`
-
-```csharp
-namespace IngameScript {
-  partial class Program {
-    // === Bootstrap ===
-    IVIOSKernel _kernel; IEnv _env; IConfig _cfg;
-
-    public Program() {
-      // create env, cfg, kernel from Mixins (source-merged at build)
-      _env = new Env(this); _cfg = new IniConfig(this); _kernel = new VIOSKernel();
-      _kernel.Init(_env, _cfg);
-      // register built-in modules
-      _kernel.RegisterModule(new ModulePower());
-      _kernel.RegisterModule(new ModuleScreen());
-      // ... etc.
-      _kernel.Start(UpdateFrequency.Update10 | UpdateFrequency.Update100);
-    }
-
-    public void Save() { _kernel.Save(); }
-
-    public void Main(string argument, UpdateType updateSource) {
-      try { _kernel.Tick(updateSource, argument); }
-      catch (Exception ex) { Echo("VIOS ERROR: " + ex.Message); /* also draw to Debug */ }
-    }
-
-    // === Interfaces (see sections above for details) ===
-    interface IVIOSKernel { void Init(IEnv env, IConfig cfg); void RegisterModule(IVIOSModule m); void Start(UpdateFrequency f); void Tick(UpdateType t, string arg); void Save(); }
-    interface IEnv { IMyGridProgramRuntimeInfo Runtime { get; } IMyGridTerminalSystem GTS { get; } IMyProgrammableBlock Me { get; } IMyIntergridCommunicationSystem IGC { get; } Action<string> Echo { get; } IMyTextSurface Console { get; } List<IMyTextSurface> DebugSurfaces { get; } DateTime UtcNow { get; } void SetUpdateFrequency(UpdateFrequency f); }
-    interface IConfig { int TicBudgetSoft { get; } int TicBudgetHard { get; } int CallDepthMax { get; } int QueueMax { get; } string NetworkTag { get; } }
-    struct VIOSYield { public int Kind; public long A; public int B; }
-    interface ICoroutine { bool Step(VIOSContext ctx, out VIOSYield next); }
-    interface IScheduler { void Enqueue(ICoroutine c); int Pending { get; } void Tick(VIOSContext ctx); }
-    struct Event { public ushort Type; public int A; public int B; public object Payload; public DateTime Utc; public UpdateType Source; }
-    interface IEventBus { void Publish(ref Event e); void Subscribe(ushort type, IEventHandler h); }
-    interface IEventHandler { void OnEvent(ref Event e, VIOSContext ctx); }
-    struct VIOSAddress { public byte Scope; public string Host; public string Module; public ushort Endpoint; }
-    struct VIOSPacket { public VIOSAddress Src, Dst; public ushort Kind; public byte Ttl; public int Seq; public string Data; }
-    interface IMessageRouter { void Unicast(ref VIOSPacket p); void Broadcast(ref VIOSPacket p, byte scope); void Multicast(ref VIOSPacket p, string group); void Pump(VIOSContext ctx); }
-    interface IPool<T> { T Take(); void Return(T item); int Count { get; } }
-    interface IPools { IPool<Event> Events { get; } IPool<VIOSPacket> Packets { get; } }
-    interface IConsole { void WriteStatus(VIOSContext ctx); void Draw(VIOSContext ctx); }
-    interface IWidget { void Render(IMyTextSurface s, ref MySpriteDrawFrame f, ref WidgetData d); }
-    struct WidgetData { /* layout */ }
-    interface IStorage { void Load(); void Save(); MyIni Ini { get; } }
-    interface IVIOSModule { string Name { get; } void Init(VIOSContext ctx, IModuleRegistrar reg); void Start(VIOSContext ctx); void Tick(VIOSContext ctx); void Stop(VIOSContext ctx); void OnMessage(ref VIOSPacket p, VIOSContext ctx); void DescribeStatus(StringBuilder sb); }
-    interface IModuleRegistrar { void OnEvent(ushort type, IEventHandler handler); void Endpoint(ushort endpointKind, IVIOSModule module); void Coroutine(ICoroutine c); void Widget(IWidget w); }
-    struct VIOSContext { public IEnv Env; public IConfig Cfg; public IEventBus Events; public IMessageRouter Router; public IStats Stats; public IPools Pools; }
-    interface IStats { int TicNow { get; } int TicSoft { get; } int DepthNow { get; } int DepthMax { get; } int Coroutines { get; } int MsgQueued { get; } /* … */ }
-    // ... concrete classes follow in Mixins; omitted here for brevity
-  }
-}
-```
-
----
-
-## 10) Architecture Diagrams (Mermaid)
-
-> You can paste these into any Mermaid-compatible viewer.
-
-### 10.1 Layered Overview
-
-```mermaid
-flowchart TD
-  PB[Programmable Block Main()] -->|Bootstrap| Kernel
-  subgraph VIOS Core
-    Kernel[VIOS Kernel]
-    Scheduler[Coroutine Scheduler]
-    Events[EventBus]
-    Router[MessageRouter/IGC]
-    Pools[Object Pools]
-    UI[Console & Widgets]
-    Storage[Storage & Config]
-    Stats[Stats & Telemetry]
-  end
-  Kernel --> Scheduler
-  Kernel --> Events
-  Kernel --> Router
-  Kernel --> Pools
-  Kernel --> UI
-  Kernel --> Storage
-  Kernel --> Stats
-  subgraph Modules
-    M1[Power]
-    M2[ScreenMgr]
-    M3[Oxygen]
-    M4[Hydrogen]
-    M5[Door]
-    M6[Airlock]
-    M7[Cargo]
-    M8[Production]
-  end
-  Kernel -.register/start/stop.-> Modules
-  Modules --> Events
-  Modules --> Router
-  UI -->|Draws to| LCD[IMyTextSurface(s)]
-  Router --> IGC[IMyIntergridCommunicationSystem]
-```
-
-### 10.2 Class/Interface Diagram (key relationships)
-
-```mermaid
-classDiagram
-  class IVIOSKernel { +Init(IEnv,IConfig) +RegisterModule(IVIOSModule) +Start(UpdateFrequency) +Tick(UpdateType,string) +Save() }
-  class IEnv { +Runtime +GTS +Me +IGC +Echo() +Console +DebugSurfaces +UtcNow +SetUpdateFrequency() }
-  class IScheduler { +Enqueue(ICoroutine) +Pending +Tick(VIOSContext) }
-  class ICoroutine { +Step(VIOSContext,out VIOSYield) }
-  class IEventBus { +Publish(Event) +Subscribe(type,handler) }
-  class IMessageRouter { +Unicast(pkt) +Broadcast(pkt,scope) +Multicast(pkt,group) +Pump(ctx) }
-  class IPools { +Events +Packets }
-  class IConsole { +WriteStatus(ctx) +Draw(ctx) }
-  class IVIOSModule { +Init +Start +Tick +Stop +OnMessage +DescribeStatus }
-  class IModuleRegistrar { +OnEvent +Endpoint +Coroutine +Widget }
-  class VIOSContext
-  class VIOSYield
-  class VIOSPacket
-  class VIOSAddress
-
-  IVIOSKernel --> IEnv
-  IVIOSKernel --> IScheduler
-  IVIOSKernel --> IEventBus
-  IVIOSKernel --> IMessageRouter
-  IVIOSKernel --> IPools
-  IVIOSKernel --> IConsole
-  IVIOSKernel --> IVIOSModule
-  IVIOSModule --> IModuleRegistrar
-  IVIOSModule --> IMessageRouter
-  IVIOSModule --> IEventBus
-```
-
-### 10.3 Tick Pipeline (sequence)
+### Sequence (Mermaid)
 
 ```mermaid
 sequenceDiagram
-  participant PB as Main()
-  participant K as Kernel
+  participant PB as PB Main()
+  participant K as VIOSKernel
   participant R as Router
-  participant E as EventBus
   participant S as Scheduler
-  participant U as UI
+  participant M as Modules
 
-  PB->>K: Tick(updateType, argument)
-  K->>R: Pump()
-  R-->>K: inbound packets
-  K->>E: Publish(Tick/Argument Events)
-  K->>S: Tick(ctx) [budget-aware]
-  loop per module
-    K->>Module: Tick(ctx) [micro-slice]
-  end
-  K->>U: Draw() [cadenced]
-  K-->>PB: done
-```
-
-### 10.4 Messaging Path (unicast)
-
-```mermaid
-sequenceDiagram
-  participant M1 as Module A
-  participant Router as MessageRouter
-  participant IGC as IGC
-  participant M2 as Module B (remote)
-
-  M1->>Router: Unicast(pkt: Dst=Host:RemotePB/ModuleB)
-  alt Dst.Host==local
-    Router-->>M2: deliver in-process
-  else WAN/LAN
-    Router->>IGC: Send(tag="VIOS", data)
-    IGC-->>Router: Receive(tag)
-    Router-->>M2: deliver via listener
-  end
-```
-
-### 10.5 Module Lifecycle (state machine)
-
-```mermaid
-stateDiagram-v2
-  [*] --> Init
-  Init --> Started: Start()
-  Started --> Updating: first Tick
-  Updating --> Updating: Tick()
-  Updating --> Stopping: Stop requested / PB shutdown
-  Stopping --> [*]
+  PB->>K: Tick(update,arg)
+  K->>K: Read TIC/depth → budgets
+  K->>R: Pump inbound/local (bounded)
+  R-->>K: Delivered packets
+  K->>S: Tick (cooperative; yield on soft)
+  K->>M: Module.Tick(ctx) (cheap)
+  K-->>PB: Done
 ```
 
 ---
 
-## 11) CustomData (MyIni) Layout (example)
+## 7. Scheduler Design & API
+
+**Goals.** Slice any long scan/work across ticks; avoid exceeding TIC/hard; keep call chain depth low; zero allocations in steady state.
+
+**Model.** A coroutine is any `ICoroutine` with `bool MoveNext()`. It holds its own localized state (e.g., index pointers, counters, next‑run tick). A scheduler ticks a ring buffer/list of active coroutines, removing finished ones and bailing when budgets are reached.
+
+**Yield patterns (C# 6‑friendly).** Without `async/await`, encode yields as integer tick targets and return `true/false` from `MoveNext()`:
+
+- **Yield.Now**: run again in the same tick (rare; only small steps).
+- **Yield.NextTick**: set `nextRunTick = currentTick + 1`.
+- **Yield.After(N)**: set `nextRunTick += N` to back‑off.
+
+**Budgeting.**
+
+- Stop the loop when `Runtime.CurrentInstructionCount >= SoftTicBudget` or `CurrentCallChainDepth >= MaxDepth`.
+- Hard cap never crossed; if close, skip the rest, reschedule next tick.
+
+**Stats.** Maintain counters: active coroutines, ran this tick, yields, time‑sliced tasks. Report on status line.
+
+---
+
+## 8. Messaging & Events
+
+**Addressing.**
+
+- `VIOSAddress.Scope`: `0=host`, `1=LAN` (connected grids), `2=WAN` (separate grids / IGC).
+- `VIOSAddress.Id`: long identifier (Me.EntityId or computed).
+
+**Packet.** `VIOSPacket` has `To`, `From`, `Endpoint` (`vendor.module.endpoint`), `Payload` (compact text), `Flags`.
+
+**Queues.** Two in core: **Inbound** (IGC + local) and **Outbound** (to IGC). Both bounded. On overflow: **drop‑oldest** and increment `Stats.Dropped`.
+
+**Dispatch.**
+
+- Local: deliver to registered handlers by endpoint string match (exact or prefix for multicast).
+- IGC: subscribe by tag; incoming `MyIGCMessage` converted to `VIOSPacket`; outgoing built to string.
+
+**Payload formats.** Favor INI‑style or `key=value;` delimited strings. Avoid JSON/XML.
+
+**Examples.**
+
+- Query: `Power.Status?` → reply `Power.Status! stored=3.20,max=4.00,in=0.40,out=1.10`.
+- Broadcast discovery: `NameSvc.Announce name=Driller-1,host=123456`.
+
+---
+
+## 9. Pools, Queues, and Memory Policy
+
+- Maintain object pools for packet wrappers and reusable `StringBuilder` per module.
+- Pre‑size `List<T>` and ring buffers; avoid `Add` growth in steady state.
+- Queue policies: bounded capacity (configurable); on overflow drop oldest (not newest) to keep system responsive.
+
+---
+
+## 10. UI Subsystem
+
+**Surfaces.**
+
+- Default: PB LCD (surface index 0).
+- Configurable list in `CustomData`: `PB:0`, block names with surface indices, or group names.
+
+**Widgets.**
+
+- **Header:** grid name, block name, UTC, OS label `VIOS`.
+- **Footer:** status text + counters (TIC, coroutines, messages, dropped).
+- **Spinner:** simple 4‑state spinner.
+- **Progress:** min/max bar for tasks.
+- **List/Table:** left‑aligned columns using monospaced font (Debug).
+- **2D Chart:** coarse sparkline line/columns using sprites.
+
+**Cadence.** Draw at `Update10` by default (configurable: `Update1/10/100`). ScreenMgr coalesces updates.
+
+---
+
+## 11. Configuration & Persistence
+
+**Config (MyIni in CustomData).**
 
 ```ini
 [VIOS]
@@ -512,86 +413,200 @@ TIC.Hard=45000
 Depth.Max=50
 Network.Tag=VIOS
 
-[Console]
-Surfaces=PB:0;LCD "Bridge Main":0
-Draw.Cadence=Update10
-
 [Modules]
-Enable=Power,ScreenMgr,Oxygen,Hydrogen,Door,Airlock,Cargo,Production
+Enable=Power,ScreenMgr
 
-[Airlock:Hangar]
-OuterDoor=Door Hangar Out
-InnerDoor=Door Hangar In
-PressureSensor=Sensor Hangar
+[ScreenMgr]
+Surfaces=PB:0
+Draw.Cadence=Update10
+```
+
+**State (Storage).**
+
+- Kernel/state summary + module compact state strings. Keep small to avoid storage bloat.
+- On `Program()` construction, parse `Storage` and rebuild minimal state; schedule heavy discovery later.
+
+---
+
+## 12. Module API, Registry & Lifecycles
+
+**Neutral class names** implementing `IVIOSModule`.
+**Lifecycle**
+
+1. `Init(ctx, reg)`: subscribe endpoints; parse config; enqueue discovery coroutines.
+2. `Start(ctx)`: reset counters; warm caches.
+3. `Tick(ctx)`: cheap updates; all heavy loops via scheduler.
+4. `Stop(ctx)`: release pools, clear lists.
+5. `OnMessage(ref p, ctx)`: stateless and cheap; defer heavy replies to coroutines if needed.
+
+**Status.** Each module implements `DescribeStatus(StringBuilder sb)` for ScreenMgr / Console.
+
+---
+
+## 13. Starter Modules (Power, ScreenMgr)
+
+**PowerModule**
+
+- Cache lists of `IMyBatteryBlock`, `IMyReactor`, `IMySolarPanel`, `IMyHydrogenEngine`.
+- On `Tick`: recompute aggregates (`stored`, `max`, `in`, `out`) without allocations.
+- Endpoint `Power.Status?` → reply `Power.Status!` with compact line.
+
+**ScreenManagerModule**
+
+- Parse `[ScreenMgr]` surfaces and cadence; draw header/UTC/footer; include stats line.
+- Use `MySpriteDrawFrame` and Debug font for crisp text; avoid per‑tick allocations.
+
+---
+
+## 14. Safety, Budgets, and Fallbacks
+
+- **Soft TIC** default 30000; **Hard TIC** 45000; **MaxDepth** 50.
+- Kernel must **bail early** when soft reached; never cross hard.
+- If an exception occurs in a module handler, catch/log locally and continue; do not take down the kernel.
+
+---
+
+## 15. Branding & Third‑Party Extensions
+
+- **Core** types use uppercase **VIOS** in class/interface/struct names (`VIOSKernel`, `IVIOSModule`, `VIOSPacket`, `VIOSContext`).
+- **Modules/Components**: neutral class names; compatible via branded interfaces.
+- Third‑party mixins live under `ThirdParty/` (git submodules).
+- IGC tag is configurable; default `VIOS`.
+
+---
+
+## 16. Diagrams (Mermaid)
+
+### Layered Overview
+
+```mermaid
+flowchart TD
+  PB[Programmable Block] --> K(VIOSKernel)
+  K --> SCHED[Coroutine Scheduler]
+  K --> ROUTER[Message Router]
+  K --> REG[Module Registry]
+  K --> UI[UI Widgets]
+  K --> STORE[Storage/Config]
+  REG --> M1[PowerModule]
+  REG --> M2[ScreenManagerModule]
+  REG --> Mx[3rd‑party Modules]
+  ROUTER --> IGC[IMyIntergridCommunicationSystem]
+  UI --> LCD[IMyTextSurface(s)]
+```
+
+### Class Diagram (Key Types)
+
+```mermaid
+classDiagram
+  class VIOSKernel {
+    +Init(env,config)
+    +RegisterModule(m)
+    +Start(freq)
+    +Tick(update,arg)
+    +Save()
+    -IEnv env
+    -IMessageRouter router
+    -ICoroutineScheduler scheduler
+    -List~IVIOSModule~ modules
+    -IStats stats
+  }
+  class IVIOSModule {<<interface>>}
+  class IEnv {<<interface>>}
+  class IConfig {<<interface>>}
+  class IMessageRouter {<<interface>>}
+  class ICoroutineScheduler {<<interface>>}
+  class VIOSPacket
+  class VIOSAddress
+
+  VIOSKernel --> IEnv
+  VIOSKernel --> IMessageRouter
+  VIOSKernel --> ICoroutineScheduler
+  VIOSKernel --> IVIOSModule
+  VIOSPacket --> VIOSAddress
+```
+
+### Tick Sequence
+
+```mermaid
+sequenceDiagram
+  participant PB as PB Main()
+  participant K as VIOSKernel
+  participant R as Router
+  participant S as Scheduler
+  participant M as Modules
+
+  PB->>K: Tick(update,arg)
+  K->>K: Budgets (TIC/depth)
+  K->>R: Pump inbound/local
+  R-->>K: Packets
+  K->>S: Coroutines (bounded)
+  K->>M: Module.Tick(ctx)
+  K-->>PB: Done
+```
+
+### Coroutine State Machine
+
+```mermaid
+stateDiagram-v2
+  [*] --> Ready
+  Ready --> Running: Tick()
+  Running --> Yielded: Soft TIC reached / After(N)
+  Yielded --> Ready: Next allowed tick
+  Running --> Done: MoveNext()==false
 ```
 
 ---
 
-## 12) Extension Patterns
-
-* **Callbacks**: module registers named callbacks with kernel. Other modules resolve by name and invoke.
-* **RPC**: message `Kind=RPC` with `Endpoint` routing; response `Seq` parity for correlation.
-* **Coroutine Library**: common coroutines for *block scans*, *inventory walks*, *graph traversals*.
-* **Diagnostics**: `Stats` publishes rolling averages per 100 ticks; UI footer consumes.
-
----
-
-## 13) Next Steps
-
-1. Generate Mixins with concrete classes (`Env`, `VIOSKernel`, `Scheduler`, `Router`, etc.).
-2. Add a **ScreenMgr** basic module to prove LCD/Widgets and budgets.
-3. Add **Power** basic module to prove discovery/pooling and 2D diagrams.
-4. Wire minimal **Name Service** broadcast and local registry.
-5. Create MDK² **Mixin Projects** and a **PB Script** bootstrap project using the provided `csproj`.
-
----
-
-## Appendix A: Naming-compliant Module Stubs / Templates
+## 17. Appendix: Minimal PB Bootstrap
 
 ```csharp
 namespace IngameScript
 {
   partial class Program
   {
-    // Base class using uppercase VIOS (preferred when branding)
-    abstract class VIOSModuleBase : IVIOSModule
+    IVIOSKernel _kernel; IEnv _env; IConfig _cfg;
+
+    public Program()
     {
-      public abstract string Name { get; }
-      public virtual void Init(VIOSContext ctx, IModuleRegistrar reg) { }
-      public virtual void Start(VIOSContext ctx) { }
-      public virtual void Tick(VIOSContext ctx) { }
-      public virtual void Stop(VIOSContext ctx) { }
-      public virtual void OnMessage(ref VIOSPacket p, VIOSContext ctx) { }
-      public virtual void DescribeStatus(StringBuilder sb) { }
+      _env = new Env(this);
+      _cfg = new IniConfig(this);
+      _kernel = new VIOSKernel();
+      _kernel.Init(_env, _cfg);
+      _kernel.RegisterModule(new PowerModule());
+      _kernel.RegisterModule(new ScreenManagerModule());
+      _kernel.Start(UpdateFrequency.Update10 | UpdateFrequency.Update100);
     }
 
-    // Option A: Neutral module names (no OS name in class)
-    class ModulePower : VIOSModuleBase
-    {
-      public override string Name { get { return "Power"; } }
-      // add overrides as needed
-    }
+    public void Save() { _kernel.Save(); }
 
-    class ModuleScreen : VIOSModuleBase
+    public void Main(string argument, UpdateType updateSource)
     {
-      public override string Name { get { return "ScreenMgr"; } }
-      // add overrides as needed
+      try { _kernel.Tick(updateSource, argument); }
+      catch (System.Exception ex) { Echo("VIOS ERROR: " + ex.Message); }
     }
-
-    // Option B: Branded module names (include OS name, must use uppercase VIOS)
-    class VIOSPowerModule : VIOSModuleBase
-    {
-      public override string Name { get { return "Power"; } }
-    }
-
-    class VIOSScreenModule : VIOSModuleBase
-    {
-      public override string Name { get { return "ScreenMgr"; } }
-    }
-
-    // Variables/fields may be lowercase 'vios'
-    VIOSKernel _viosKernelRef;
   }
 }
 ```
 
+---
+
+## 18. Implementation Notes & Checklists
+
+**Quality Gates**
+
+- C# 6 only; PB whitelist safe.
+- All code inside `IngameScript.Program`.
+- Zero allocations in steady‑state tick paths.
+- Enforce `TIC`/`Depth` budgets; bail on soft; never cross hard.
+- Neutral module names; branded **VIOS** in type names where applicable.
+- LCD drawing at configured cadence; avoid redundant `DrawFrame` work.
+
+**CI Hooks**
+
+- `tools/check-architecture.ps1` checks TFM/LangVersion, headers, enclosure, naming, and warns on LINQ.
+- PR workflow posts inline comments for violations; PR template includes acceptance checklist.
+
+**Next Steps**
+
+- Fill `Mixins/VIOS.Core/*.cs` with skeletons per this spec.
+- Finalize `ScreenMgr` + `Power` modules and add a breadcrumb LCD to prove end‑to‑end routing + scheduler.

@@ -1,0 +1,38 @@
+name: Docs — Validate Architecture
+
+on:
+  pull_request:
+    paths:
+      - "docs/architecture/VIOS-Architecture.md"
+      - "tools/validate-architecture.sh"
+  push:
+    branches: [ main ]
+    paths:
+      - "docs/architecture/VIOS-Architecture.md"
+      - "tools/validate-architecture.sh"
+
+jobs:
+  validate_architecture:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Clone (no marketplace actions)
+        run: |
+          set -e
+          git clone --no-tags --depth=1 "https://github.com/${GITHUB_REPOSITORY}.git" .
+          if [ -n "${GITHUB_SHA}" ]; then
+            git fetch --no-tags --prune --depth=1 origin "${GITHUB_SHA}"
+            git checkout "${GITHUB_SHA}"
+          fi
+
+      - name: Install node + mermaid-cli
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y nodejs npm
+          npm i -g @mermaid-js/mermaid-cli@10
+
+      - name: Validate architecture doc
+        run: tools/validate-architecture.sh
+

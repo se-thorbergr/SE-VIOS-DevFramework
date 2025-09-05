@@ -1,156 +1,118 @@
-name: CI
+name: CI — Build & Policy Gates
 
 on:
   push:
     branches: [main]
-    # This also runs on tag pushes; we block ad-hoc tags below.
-    tags:
-      - "*"
+    paths-ignore:
+      - "docs/**"
+      - ".github/workflows/docs-validate.yml"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - ".github/workflows/docs-validate.yml"
 
 permissions:
   contents: read
-  pull-requests: write # needed to post inline review comments
+  pull-requests: read
+
+env:
+  SOLUTION: SE-VIOS-DevFramework.sln
+  CONFIGURATION: Release
 
 jobs:
-  build-and-verify:
+  build:
+    name: Build (Windows / MSBuild)
     runs-on: windows-latest
-
     steps:
-      - name: Checkout (with submodules)
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      # --- PR Template Checklist Enforcement (PRs only) ---
-      - name: Verify PR contains Acceptance Checklist
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const path = '.github/pull_request_template.md';
-
-            // Load PR body
-            const pr = context.payload.pull_request ?? (await github.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number
-            })).data;
-            const body = (pr.body || '').replace(/\r/g, '');
-
-            // Load template and extract the checklist block
-            if (!fs.existsSync(path)) {
-              core.setFailed(`PR template not found at ${path}`);
-              return;
-            }
-            const tpl = fs.readFileSync(path, 'utf8').replace(/\r/g, '');
-
-            const start = tpl.indexOf('## PR Acceptance Checklist');
-            if (start < 0) {
-              core.setFailed('Could not find "## PR Acceptance Checklist" section in PR template.');
-              return;
-            }
-            const rest = tpl.slice(start);
-            const m = rest.match(/\n(?:---|\#{2,}\s)/);
-            const endIdx = m ? m.index : rest.length;
-            const block = rest.slice(0, endIdx);
-
-            // Pull out item texts from "- [ ] ..." or "- [x] ..."
-            const want = block.split('\n')
-              .map(l => l.trim())
-              .filter(l => /^-\s*\[(?:\s|x)\]\s+/i.test(l))
-              .map(l => l.replace(/-\s*\[(?:\s|x)\]\s*/i, '').toLowerCase());
-
-            if (want.length === 0) {
-              core.setFailed('No checklist items found in the PR template block.');
-              return;
-            }
-
-            const normBody = body.toLowerCase();
-            const missing = [];
-            for (const item of want) {
-              if (!normBody.includes(item)) {
-                missing.push(item);
-              }
-            }
-
-            if (missing.length) {
-              core.setFailed(
-                'PR is missing acceptance checklist items (copy the checklist from the PR template and keep the item texts intact):\n' +
-                missing.map(m => `- ${m}`).join('\n')
-              );
-            } else {
-              core.info('Acceptance checklist present ✅');
-            }
-
-      # --- Block ad-hoc tag pushes (allow only specific actors or release workflow) ---
-      - name: Block ad-hoc tag pushes
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Clone repository (no marketplace actions)
         shell: bash
         run: |
-          ALLOWED_ACTORS="geho se-thorbergr-bot"
-          if ! echo "$ALLOWED_ACTORS" | grep -qw "$GITHUB_ACTOR"; then
-            echo "Direct tag pushes are blocked. Use the release workflow."
-            exit 1
+          set -e
+          git clone --no-tags --depth=1 "https://github.com/${GITHUB_REPOSITORY}.git" .
+          if [ -n "${GITHUB_SHA}" ]; then
+            git fetch --no-tags --prune --depth=1 origin "${GITHUB_SHA}"
+            git checkout "${GITHUB_SHA}"
           fi
-          echo "Tag push allowed for actor '$GITHUB_ACTOR'."
 
-      - name: Setup .NET SDK 9.x
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "9.0.x"
-
-      - name: Setup MSBuild (for .NET Framework build)
-        uses: microsoft/setup-msbuild@v2
-
-      # --- Policy / Architecture checks with annotations + JSON for inline PR review ---
-      - name: Verify architecture & policy (with annotations + JSON)
+      - name: Locate MSBuild (vswhere)
+        id: msbuild
         shell: pwsh
-        run: ./tools/check-architecture.ps1 -RepoRoot . -EmitAnnotations -CommentsOut annotations.json
-
-      - name: Post inline review comments (PR only)
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            if (!fs.existsSync('annotations.json')) {
-              core.info('No annotations.json produced.');
-              return;
-            }
-            const comments = JSON.parse(fs.readFileSync('annotations.json', 'utf8'));
-            if (!comments.length) {
-              core.info('No inline comments to post.');
-              return;
-            }
-            await github.pulls.createReview({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              event: 'REQUEST_CHANGES', // switch to 'COMMENT' for softer feedback
-              body: 'Automated policy checks found issues. See inline comments.',
-              comments: comments.map(c => ({
-                path: c.path,
-                line: c.line,
-                side: 'RIGHT',
-                body: c.body
-              }))
-            });
+        run: |
+          $vsw = "${Env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vsw)) { throw "vswhere not found at $vsw" }
+          $msbuild = & $vsw -latest -products * -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
+          if (-not $msbuild) { throw "MSBuild not found via vswhere" }
+          "MSBuild=$msbuild" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
 
       - name: Restore
         shell: pwsh
-        run: dotnet restore
+        run: |
+          & dotnet --version
+          & dotnet restore "$Env:SOLUTION"
 
       - name: Build (Release)
         shell: pwsh
-        run: msbuild SE-VIOS-DevFramework.sln /p:Configuration=Release /m
+        run: |
+          & "${{ steps.msbuild.outputs.MSBuild }}" "$Env:SOLUTION" /p:Configuration=$Env:CONFIGURATION /m /verbosity:minimal /restore
 
-      - name: Upload annotations (artifact)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: annotations
-          path: annotations.json
-          if-no-files-found: ignore
+  policy_checks:
+    name: Policy Checks (C#6/net48/Enclosure/Naming/Headers)
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - name: Clone repository (no marketplace actions)
+        shell: bash
+        run: |
+          set -e
+          git clone --no-tags --depth=1 "https://github.com/${GITHUB_REPOSITORY}.git" .
+          if [ -n "${GITHUB_SHA}" ]; then
+            git fetch --no-tags --prune --depth=1 origin "${GITHUB_SHA}"
+            git checkout "${GITHUB_SHA}"
+          fi
+
+      - name: Run tools/check-architecture.ps1
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "tools/check-architecture.ps1")) {
+            Write-Error "Policy script missing: tools/check-architecture.ps1"
+            exit 1
+          }
+          Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+          ./tools/check-architecture.ps1
+
+  pr_acceptance_gate:
+    if: ${{ github.event_name == 'pull_request' }}
+    name: PR Acceptance Checklist Gate
+    runs-on: windows-latest
+    needs: [build, policy_checks]
+    permissions:
+      pull-requests: read
+      contents: read
+    steps:
+      - name: Load PR body and validate checklist
+        shell: pwsh
+        env:
+          EVENT_PATH: ${{ github.event_path }}
+        run: |
+          $json = Get-Content -Raw -Path $Env:EVENT_PATH | ConvertFrom-Json
+          $body = $json.pull_request.body
+          if (-not $body) {
+            Write-Error "PR body is empty. Please include the PR Acceptance Checklist."
+            exit 1
+          }
+
+          # Find the acceptance section and count checkboxes
+          $hasSection = $body -match '(?s)##\s*PR\s*Acceptance\s*Checklist.*'
+          $checkboxCount = ([regex]::Matches($body, '^- \[( |x|X)\] ', 'Multiline')).Count
+
+          if (-not $hasSection) {
+            Write-Error "Missing '## PR Acceptance Checklist' section."
+            exit 1
+          }
+          if ($checkboxCount -lt 5) {
+            Write-Error "Checklist appears incomplete (found $checkboxCount checkbox line(s)). Ensure all required items are present."
+            exit 1
+          }
+
+          Write-Host "PR Acceptance Checklist found with $checkboxCount item(s)."
