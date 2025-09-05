@@ -1,0 +1,48 @@
+# root editorconfig for SE-VIOS-DevFramework
+root = true
+
+############################################
+# Core text settings (applies to all files)
+############################################
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Default indentation
+indent_style = space
+indent_size = 2
+
+# Keep trailing spaces in Markdown tables if any
+[*.md]
+trim_trailing_whitespace = false
+
+# Shell and PowerShell scripts
+[*.{sh,bash}]
+indent_style = space
+indent_size = 2
+
+[*.ps1]
+indent_style = space
+indent_size = 2
+
+# JSON / YAML
+[*.{json,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+# C# source
+[*.cs]
+indent_style = space
+indent_size = 4
+
+############################################
+# .NET / C# code style (Roslyn analyzers)
+# These guide IDEs; they won't break C# 6.
+############################################
+
+# var preferences (prefer explicit in public APIs, allow var locally)
+csharp_style_var_for_built_in_types = false:suggestion
+csharp_style_var_when_
+

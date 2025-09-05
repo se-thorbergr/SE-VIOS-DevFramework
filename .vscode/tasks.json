@@ -1,0 +1,160 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Solution (Release)",
+      "detail": "Build SE-VIOS-DevFramework.sln in Release using dotnet/MSBuild",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/SE-VIOS-DevFramework.sln",
+        "-c",
+        "Release",
+        "/m",
+        "/v:m"
+      ],
+      "problemMatcher": "$msCompile",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Build Solution (Debug)",
+      "detail": "Build solution in Debug",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/SE-VIOS-DevFramework.sln",
+        "-c",
+        "Debug",
+        "/m",
+        "/v:m"
+      ],
+      "problemMatcher": "$msCompile",
+      "group": "build"
+    },
+
+    {
+      "label": "Package PB Script (mdk2pbscript project)",
+      "detail": "Build a specific Scripts/* mdk2pbscript project to generate a PB package",
+      "type": "shell",
+      "command": "${input:buildPbProject}",
+      "problemMatcher": "$msCompile"
+    },
+
+    {
+      "label": "Policy Checks",
+      "detail": "Run tools/check-architecture.ps1 (enclosure, net48/C#6, headers, naming, whitelist hints)",
+      "type": "shell",
+      "windows": {
+        "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}/tools/check-architecture.ps1\""
+      },
+      "linux": {
+        "command": "pwsh -NoProfile -File \"${workspaceFolder}/tools/check-architecture.ps1\""
+      },
+      "osx": {
+        "command": "pwsh -NoProfile -File \"${workspaceFolder}/tools/check-architecture.ps1\""
+      },
+      "problemMatcher": []
+    },
+
+    {
+      "label": "Validate Architecture Doc",
+      "detail": "Compile mermaid blocks and verify headings in docs/architecture/VIOS-Architecture.md",
+      "type": "shell",
+      "windows": {
+        "command": "bash \"${workspaceFolder}/tools/validate-architecture.sh\""
+      },
+      "linux": {
+        "command": "bash \"${workspaceFolder}/tools/validate-architecture.sh\""
+      },
+      "osx": {
+        "command": "bash \"${workspaceFolder}/tools/validate-architecture.sh\""
+      },
+      "problemMatcher": []
+    },
+
+    {
+      "label": "Stamp License Headers",
+      "detail": "Apply MIT header from tools/license_header.tmpl to source files",
+      "type": "shell",
+      "windows": {
+        "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}/tools/Add-LicenseHeader.ps1\""
+      },
+      "linux": {
+        "command": "bash \"${workspaceFolder}/tools/add_license_header.sh\""
+      },
+      "osx": {
+        "command": "bash \"${workspaceFolder}/tools/add_license_header.sh\""
+      },
+      "problemMatcher": []
+    },
+
+    {
+      "label": "Install Git Hooks",
+      "detail": "Copy .githooks/* into .git/hooks and make them executable",
+      "type": "shell",
+      "windows": {
+        "command": "pwsh -NoProfile -Command \"if (!(Test-Path .git)) { git init } ; Copy-Item -Force -Recurse .githooks/* .git/hooks/ ; Get-ChildItem .git/hooks/*.ps1 | ForEach-Object { $_.Attributes = 'Normal' }\""
+      },
+      "linux": {
+        "command": "bash -c \"[ -d .git ] || git init; cp -f .githooks/* .git/hooks/; chmod +x .git/hooks/* || true\""
+      },
+      "osx": {
+        "command": "bash -c \"[ -d .git ] || git init; cp -f .githooks/* .git/hooks/; chmod +x .git/hooks/* || true\""
+      },
+      "problemMatcher": []
+    },
+
+    {
+      "label": "Clean",
+      "detail": "dotnet clean the solution",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "clean",
+        "${workspaceFolder}/SE-VIOS-DevFramework.sln",
+        "-c",
+        "Release"
+      ],
+      "problemMatcher": "$msCompile"
+    },
+
+    {
+      "label": "Prep → Policy + Headers + Validate Doc",
+      "detail": "Run policy checks, license stamping, and doc validation",
+      "dependsOn": [
+        "Policy Checks",
+        "Stamp License Headers",
+        "Validate Architecture Doc"
+      ],
+      "problemMatcher": []
+    },
+
+    {
+      "label": "Build (Release) → with Prep",
+      "detail": "Run Prep then build",
+      "dependsOn": [
+        "Prep → Policy + Headers + Validate Doc",
+        "Build Solution (Release)"
+      ],
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "buildPbProject",
+      "type": "pickString",
+      "description": "Select Scripts/* project to package (mdk2pbscript)",
+      "options": [
+        "dotnet build \"${workspaceFolder}/Scripts/VIOS.Bootstrap/VIOS.Bootstrap.csproj\" -c Release /m /v:m",
+        "dotnet build \"${workspaceFolder}/Scripts/VIOS.DevSandbox/VIOS.DevSandbox.csproj\" -c Release /m /v:m"
+      ],
+      "default": "dotnet build \"${workspaceFolder}/Scripts/VIOS.Bootstrap/VIOS.Bootstrap.csproj\" -c Release /m /v:m"
+    }
+  ]
+}
+

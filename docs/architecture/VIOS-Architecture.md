@@ -1,4 +1,4 @@
-# VIOS Architecture (Long Form)
+# VIOS Architecture
 
 **Product:** Viking Industries Operating System (**VIOS**)
 **Context:** Space Engineers Programmable Block • MDK²‑SE • VS Code
@@ -27,31 +27,45 @@
 
 ## 2. MDK² Hard Constraints & Enclosure Rule
 
-1. **Enclosure (MDK² rule):** All generated code (except `using`) must be inside:
+**PB Script projects (`mdk2pbscript`)** must declare the entry type like this:
 
 ```csharp
 namespace IngameScript
 {
-    partial class Program
+    public partial class Program : MyGridProgram
     {
         // generated code here
     }
 }
 ```
 
-2. **Targets & Packages:** `netframework48`, `LangVersion=6`. PB script projects include `Mal.Mdk2.PbPackager`, `Mal.Mdk2.PbAnalyzers`, and `Mal.Mdk2.References`. Mixin projects include `PbAnalyzers` + `References` only.
-3. **SE/MDK²-SE (VRage-first):** Favor _VRage_ APIs over general .NET where possible (e.g., `IMyTextSurface`, `MySprite`, `IMyIntergridCommunicationSystem`, `MyIni`).
-4. **Safety:** Wrap the top-level PB driver (`Main()`/kernel dispatcher) in `try/catch`; echo concise errors and optionally display on a Debug LCD surface.
-5. **Ticks & Budgets:** Track **TIC** (`Runtime.CurrentInstructionCount`) and **Call Depth** (`Runtime.CurrentCallChainDepth`) and **yield** at configurable thresholds (Soft/Hard TIC and MaxDepth read from `CustomData`).
-6. **Coroutine‑First:** Use coroutine/state‑machine scheduling extensively to spread work across ticks; heavy scans must be sliced.
-7. **Pooling/Queuing:** Reuse buffers/objects aggressively; provide central pools for messages/packets/sprites/strings; use bounded queues with drop‑oldest on overflow.
-8. **Events/Messages:** Maintain a unified EventBus & MessageRouter for local (host/LAN) and inter‑grid (WAN via IGC) with unicast/multicast/broadcast.
-9. **Time & Cycles:** Record UTC (`DateTime.UtcNow`) per tick and per event for diagnostics and scheduling.
-10. **Mixins Layout:** Core lives under **Mixins/VIOS.Core**; PB scripts are thin bootstraps in **Scripts/**; user extensions live in **Mixins/Modules/** (neutral names) and **Mixins/Components/**.
-11. **Naming:** **VIOS** must be uppercase in any class/interface/struct names containing the OS name; variables may use lowercase `vios`. **Modules/Components** keep **neutral** class names (no `VIOS` prefix) while implementing branded interfaces.
-12. **UI Cadence:** LCD drawing is throttled (default `Update10`) and budget‑aware; avoid redundant `DrawFrame` work.
-13. **Persistence & Config:** Use PB `Storage` for state and `Me.CustomData` (via `MyIni`) for configuration.
-14. **Whitelist Compliance:** Use only PB‑allowed APIs; avoid LINQ/allocations in hot paths and any forbidden namespaces.
+**Mixin projects (mdk2mixin):** must **not** redeclare visibility or base class; use:
+
+```csharp
+namespace IngameScript
+{
+    partial class Program
+    {
+        // mixin code here
+    }
+}
+```
+
+**Additional hard constraints**:
+
+1. **Targets & Packages:** `netframework48`, `LangVersion=6`. PB script projects include `Mal.Mdk2.PbPackager`, `Mal.Mdk2.PbAnalyzers`, and `Mal.Mdk2.References`. Mixin projects include `PbAnalyzers` + `References` only.
+2. **SE/MDK²-SE (VRage-first):** Favor _VRage_ APIs over general .NET where possible (e.g., `IMyTextSurface`, `MySprite`, `IMyIntergridCommunicationSystem`, `MyIni`).
+3. **Safety:** Wrap the top-level PB driver (`Main()`/kernel dispatcher) in `try/catch`; echo concise errors and optionally display on a Debug LCD surface.
+4. **Ticks & Budgets:** Track **TIC** (`Runtime.CurrentInstructionCount`) and **Call Depth** (`Runtime.CurrentCallChainDepth`) and **yield** at configurable thresholds (Soft/Hard TIC and MaxDepth read from `CustomData`).
+5. **Coroutine‑First:** Use coroutine/state‑machine scheduling extensively to spread work across ticks; heavy scans must be sliced.
+6. **Pooling/Queuing:** Reuse buffers/objects aggressively; provide central pools for messages/packets/sprites/strings; use bounded queues with drop‑oldest on overflow.
+7. **Events/Messages:** Maintain a unified EventBus & MessageRouter for local (host/LAN) and inter‑grid (WAN via IGC) with unicast/multicast/broadcast.
+8. **Time & Cycles:** Record UTC (`DateTime.UtcNow`) per tick and per event for diagnostics and scheduling.
+9. **Mixins Layout:** Core lives under **Mixins/VIOS.Core**; PB scripts are thin bootstraps in **Scripts/**; user extensions live in **Mixins/Modules/** (neutral names) and **Mixins/Components/**.
+10. **Naming:** **VIOS** must be uppercase in any class/interface/struct names containing the OS name; variables may use lowercase `vios`. **Modules/Components** keep **neutral** class names (no `VIOS` prefix) while implementing branded interfaces.
+11. **UI Cadence:** LCD drawing is throttled (default `Update10`) and budget‑aware; avoid redundant `DrawFrame` work.
+12. **Persistence & Config:** Use PB `Storage` for state and `Me.CustomData` (via `MyIni`) for configuration.
+13. **Whitelist Compliance:** Use only PB‑allowed APIs; avoid LINQ/allocations in hot paths and any forbidden namespaces.
 
 ---
 
@@ -310,19 +324,19 @@ namespace IngameScript { partial class Program {
 
 ```mermaid
 sequenceDiagram
-  participant PB as PB Main()
+  participant PB
   participant K as VIOSKernel
   participant R as Router
   participant S as Scheduler
   participant M as Modules
 
-  PB->>K: Tick(update,arg)
-  K->>K: Read TIC/depth → budgets
-  K->>R: Pump inbound/local (bounded)
-  R-->>K: Delivered packets
-  K->>S: Tick (cooperative; yield on soft)
-  K->>M: Module.Tick(ctx) (cheap)
-  K-->>PB: Done
+  PB->>K: Tick
+  K->>K: Compute budgets
+  K->>R: Pump queues
+  R->>K: Deliver packets
+  K->>S: Run coroutines
+  K->>M: Module tick
+  K->>PB: Done
 ```
 
 ---
@@ -481,7 +495,7 @@ Draw.Cadence=Update10
 
 ```mermaid
 flowchart TD
-  PB[Programmable Block] --> K(VIOSKernel)
+  PB[Programmable Block] --> K[VIOSKernel]
   K --> SCHED[Coroutine Scheduler]
   K --> ROUTER[Message Router]
   K --> REG[Module Registry]
@@ -489,9 +503,9 @@ flowchart TD
   K --> STORE[Storage/Config]
   REG --> M1[PowerModule]
   REG --> M2[ScreenManagerModule]
-  REG --> Mx[3rd‑party Modules]
+  REG --> Mx[Third-party Modules]
   ROUTER --> IGC[IMyIntergridCommunicationSystem]
-  UI --> LCD[IMyTextSurface(s)]
+  UI --> LCD[IMyTextSurfaces]
 ```
 
 ### Class Diagram (Key Types)
@@ -562,7 +576,7 @@ stateDiagram-v2
 ```csharp
 namespace IngameScript
 {
-  partial class Program
+  public partial class Program : MyGridProgram
   {
     IVIOSKernel _kernel; IEnv _env; IConfig _cfg;
 

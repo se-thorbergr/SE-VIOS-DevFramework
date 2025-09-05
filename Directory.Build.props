@@ -1,9 +1,10 @@
 <Project>
   <PropertyGroup>
-    <LangVersion>6</LangVersion>
     <TargetFramework>netframework48</TargetFramework>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <LangVersion>6</LangVersion>
     <RootNamespace>IngameScript</RootNamespace>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <Configurations>Release;Debug</Configurations>
+    <Platforms>x64</Platforms>
   </PropertyGroup>
 </Project>
-

@@ -1,6 +1,12 @@
 {
   "folders": [
     { "path": "." },
+    { "path": "Scripts/VIOS.Bootstrap" },
+    { "path": "Scripts/VIOS.DevSandbox" },
+    { "path": "Scripts/VIOS.Minimal" },
+    { "path": "Mixins/VIOS.Core" },
+    { "path": "Mixins/Modules/ScreenMgr" },
+    { "path": "Mixins/Modules/Power" }
   ],
   "settings": {
     "files.exclude": { "**/bin": true, "**/obj": true },
