@@ -3,115 +3,102 @@
 
     Checks:
       - .csproj discovery (recurses into submodules)
-      - TargetFramework == netframework48
-      - LangVersion == 6 (project or Directory.Build.props)
+      - TargetFramework == netframework48 (from project or Directory.Build.props)
+      - LangVersion == 6 (from project or Directory.Build.props)
       - Package shape:
-          PB scripts: Mal.Mdk2.PbPackager + PbAnalyzers + References
-          Mixins:     PbAnalyzers + References (no PbPackager)
-      - Program enclosure rules (lightweight regex on .cs):
-          Scripts/*/Program.cs    -> 'public partial class Program : MyGridProgram'
-          Mixins/**               -> 'partial class Program' (no 'public' and no ': MyGridProgram')
+          PB scripts: Mal.Mdk2.PbPackager + Mal.Mdk2.PbAnalyzers + Mal.Mdk2.References
+          Mixins:     Mal.Mdk2.PbAnalyzers + Mal.Mdk2.References (no PbPackager)
+      - Program enclosure rules (regex on .cs):
+          Scripts/*/Program.cs -> 'public partial class Program : MyGridProgram'
+          Mixins/**            -> 'partial class Program' (no 'public', no ': MyGridProgram')
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Fail($msg) {
-  Write-Error $msg
-  exit 1
-}
-
+function Fail($msg) { Write-Error $msg; exit 1 }
 function Info($msg) { Write-Host $msg }
 function Notice($msg) { Write-Host "::notice::$msg" }
 function Warn($msg) { Write-Host "::warning::$msg" }
 
-# Ensure we're at repo root (heuristic)
-if (-not (Test-Path ".git")) {
-  Fail "Run this script from the repository root (no .git directory found)."
+# Ensure repo root (heuristic)
+if (-not (Test-Path ".git")) { Fail "Run this script from the repository root (no .git directory found)." }
+
+# Helper: get first node inner text by XPath
+function Get-NodeText {
+  param([xml]$Xml, [string]$XPath)
+  try {
+    $node = $Xml.SelectSingleNode($XPath)
+    if ($null -ne $node -and $node.InnerText) { return $node.InnerText.Trim() }
+  } catch { }
+  return $null
 }
 
-# Try to ensure submodules exist when running locally
+# Load Directory.Build.props (optional fallbacks)
+$dirPropsPath = Join-Path (Get-Location) "Directory.Build.props"
+$dirLang = $null; $dirTFM = $null
+if (Test-Path $dirPropsPath) {
+  try {
+    [xml]$dirXml = Get-Content -LiteralPath $dirPropsPath -Raw
+    $dirTFM  = Get-NodeText $dirXml '//Project/PropertyGroup/TargetFramework'
+    $dirLang = Get-NodeText $dirXml '//Project/PropertyGroup/LangVersion'
+  } catch {
+    Warn "Failed parsing Directory.Build.props: $($_.Exception.Message)"
+  }
+}
+
+# Discover projects; try to init submodules once if missing
 $csproj = Get-ChildItem -Path . -Recurse -Filter *.csproj -ErrorAction SilentlyContinue
 if (-not $csproj -or $csproj.Count -eq 0) {
   Notice "No .csproj found; attempting 'git submodule update --init --recursive --depth=1'..."
   try { git submodule update --init --recursive --depth=1 | Out-Null } catch { }
   $csproj = Get-ChildItem -Path . -Recurse -Filter *.csproj -ErrorAction SilentlyContinue
 }
-
 if (-not $csproj -or $csproj.Count -eq 0) {
   Warn "No .csproj found after submodule init. Skipping checks."
   exit 0
-}
-
-# Optionally read Directory.Build.props for shared LangVersion/TFM hints
-$dirProps = Join-Path (Get-Location) "Directory.Build.props"
-$dirLangVersion = $null
-$dirTFM = $null
-if (Test-Path $dirProps) {
-  try {
-    [xml]$dirXml = Get-Content -LiteralPath $dirProps -Raw
-    $dirLangVersion = $dirXml.Project.PropertyGroup.LangVersion | Select-Object -First 1
-    $dirTFM = $dirXml.Project.PropertyGroup.TargetFramework | Select-Object -First 1
-  } catch {
-    Warn "Failed parsing Directory.Build.props: $($_.Exception.Message)"
-  }
 }
 
 $hadError = $false
 
 Write-Host "::group::Project checks"
 foreach ($proj in $csproj) {
+  $relPath = (Resolve-Path -Relative $proj.FullName) -replace '\\','/'
   try {
     [xml]$xml = Get-Content -LiteralPath $proj.FullName -Raw
 
-    $projName = Split-Path $proj.FullName -Leaf
-    $projDir  = Split-Path $proj.FullName -Parent
-    $relPath  = Resolve-Path -Relative $proj.FullName
-
-    $pg = $xml.Project.PropertyGroup | Select-Object -First 1
-
-    # TargetFramework check
-    $tfm = $pg.TargetFramework
-    if (-not $tfm -and $pg.TargetFrameworks) {
-      $tfm = ($pg.TargetFrameworks -split ';' | Select-Object -First 1)
+    # Read TFM/Lang via XPath with fallback to Directory.Build.props
+    $tfm  = Get-NodeText $xml '//Project/PropertyGroup/TargetFramework'
+    if (-not $tfm) {
+      $tfmMulti = Get-NodeText $xml '//Project/PropertyGroup/TargetFrameworks'
+      if ($tfmMulti) { $tfm = ($tfmMulti -split ';' | Select-Object -First 1).Trim() }
     }
     if (-not $tfm) { $tfm = $dirTFM }
 
     if ($tfm -ne 'netframework48') {
       Write-Host "::error file=$relPath::TargetFramework must be 'netframework48' (found '$tfm')"
       $hadError = $true
-    } else {
-      Info "[$relPath] TargetFramework OK: $tfm"
-    }
+    } else { Info "[$relPath] TargetFramework OK: $tfm" }
 
-    # LangVersion check
-    $lang = $pg.LangVersion
-    if (-not $lang) { $lang = $dirLangVersion }
+    $lang = Get-NodeText $xml '//Project/PropertyGroup/LangVersion'
+    if (-not $lang) { $lang = $dirLang }
     if (-not $lang) {
       Write-Host "::warning file=$relPath::LangVersion not set (expected '6'); relying on default may break PB."
     } elseif ($lang -ne '6') {
       Write-Host "::error file=$relPath::LangVersion must be '6' (found '$lang')"
       $hadError = $true
-    } else {
-      Info "[$relPath] LangVersion OK: $lang"
-    }
+    } else { Info "[$relPath] LangVersion OK: $lang" }
 
-    # Package shape
+    # Package shape via XPath
+    $pkgNodes = $xml.SelectNodes('//Project/ItemGroup/PackageReference')
     $pkgs = @{}
-    foreach ($pkg in $xml.Project.ItemGroup.PackageReference) {
-      $id = $pkg.Include
-      if ($id) { $pkgs[$id] = $true }
+    foreach ($n in $pkgNodes) {
+      if ($n -and $n.Include) { $pkgs[$n.Include] = $true }
     }
 
-    $isScript = $false
-    $isMixin  = $false
-    $pathNorm = ($relPath -replace '\\','/').ToLowerInvariant()
-
-    if ($pathNorm -like "*/scripts/*/*.csproj") {
-      $isScript = $true
-    } elseif ($pathNorm -like "*/mixins/*/*.csproj") {
-      $isMixin = $true
-    }
+    $pathLower = $relPath.ToLowerInvariant()
+    $isScript = ($pathLower -like "*/scripts/*/*.csproj")
+    $isMixin  = ($pathLower -like "*/mixins/*/*.csproj")
 
     if ($isScript) {
       $need = @('Mal.Mdk2.PbPackager','Mal.Mdk2.PbAnalyzers','Mal.Mdk2.References')
@@ -137,7 +124,7 @@ foreach ($proj in $csproj) {
     }
 
   } catch {
-    Write-Host "::error file=$($proj.FullName)::Failed to parse project: $($_.Exception.Message)"
+    Write-Host "::error file=$relPath::Failed to parse project: $($_.Exception.Message)"
     $hadError = $true
   }
 }
@@ -145,10 +132,10 @@ Write-Host "::endgroup::"
 
 # Source enclosure checks
 Write-Host "::group::Source enclosure checks"
-# 1) PB Program.cs: must include the public partial + base
+# PB Program.cs must have public partial + MyGridProgram
 $scriptPrograms = Get-ChildItem -Path ./Scripts -Recurse -Filter Program.cs -ErrorAction SilentlyContinue
 foreach ($f in $scriptPrograms) {
-  $rel = Resolve-Path -Relative $f.FullName
+  $rel = (Resolve-Path -Relative $f.FullName) -replace '\\','/'
   $txt = Get-Content -LiteralPath $f.FullName -Raw
   if ($txt -notmatch 'namespace\s+IngameScript') {
     Write-Host "::error file=$rel::Missing 'namespace IngameScript'"
@@ -160,27 +147,24 @@ foreach ($f in $scriptPrograms) {
   }
 }
 
-# 2) Mixins: partial Program but NOT public and NOT base class
+# Mixins must NOT inherit MyGridProgram; avoid 'public' on partial Program
 $mixinFiles = Get-ChildItem -Path ./Mixins -Recurse -Include *.cs -ErrorAction SilentlyContinue
 foreach ($f in $mixinFiles) {
-  $rel = Resolve-Path -Relative $f.FullName
+  $rel = (Resolve-Path -Relative $f.FullName) -replace '\\','/'
   $txt = Get-Content -LiteralPath $f.FullName -Raw
   if ($txt -match 'public\s+partial\s+class\s+Program\s*:\s*MyGridProgram') {
     Write-Host "::error file=$rel::Mixin must NOT declare 'public partial class Program : MyGridProgram'"
     $hadError = $true
   }
-  if ($txt -match 'public\s+partial\s+class\s+Program\b') {
-    Write-Host "::warning file=$rel::Mixin should not use 'public' on partial Program; prefer internal/default"
-  }
   if ($txt -match 'partial\s+class\s+Program\s*:\s*MyGridProgram') {
     Write-Host "::error file=$rel::Mixin must NOT inherit MyGridProgram"
     $hadError = $true
   }
+  if ($txt -match 'public\s+partial\s+class\s+Program\b') {
+    Write-Host "::warning file=$rel::Mixin should not use 'public' on partial Program; prefer internal/default"
+  }
 }
 Write-Host "::endgroup::"
 
-if ($hadError) {
-  Fail "One or more policy checks failed."
-} else {
-  Write-Host "OK — Architecture/policy checks passed."
-}
+if ($hadError) { Fail "One or more policy checks failed." }
+else { Write-Host "OK — Architecture/policy checks passed." }
