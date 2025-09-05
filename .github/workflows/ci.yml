@@ -74,15 +74,36 @@ jobs:
     runs-on: windows-latest
     needs: build
     steps:
-      - name: Clone repository (no marketplace actions)
+      - name: Manual checkout (no external actions)
         shell: bash
         run: |
-          set -e
-          git clone --no-tags --depth=1 "https://github.com/${GITHUB_REPOSITORY}.git" .
-          if [ -n "${GITHUB_SHA}" ]; then
-            git fetch --no-tags --prune --depth=1 origin "${GITHUB_SHA}"
-            git checkout "${GITHUB_SHA}"
+          set -euo pipefail
+          git init .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git fetch --depth=1 origin "$GITHUB_SHA"
+          git checkout --progress --force "$GITHUB_SHA"
+
+      - name: Fetch submodules via HTTPS (public) — disable prompts (Windows-safe)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Make Git completely non-interactive
+          export GIT_TERMINAL_PROMPT=0
+          export GCM_INTERACTIVE=never
+          git config --global core.askPass ""
+          git config --global credential.interactive never
+          git config --global --unset-all credential.helper || true
+          git config --system --unset credential.helper || true
+
+          # Ensure all submodule URLs are HTTPS (not SSH) for CI
+          if [ -f .gitmodules ]; then
+            sed -i 's#git@github.com:#https://github.com/#g' .gitmodules
+            sed -i 's#ssh://git@github.com/#https://github.com/#g' .gitmodules
           fi
+          git submodule sync --recursive
+
+          # Update — should succeed anonymously for public repos
+          GIT_CURL_VERBOSE=1 git submodule update --init --recursive --depth=1
 
       - name: Run tools/check-architecture.ps1
         shell: pwsh
