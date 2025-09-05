@@ -25,26 +25,33 @@ jobs:
     name: Build (Windows / MSBuild)
     runs-on: windows-latest
     steps:
-      - name: Clone repository (no marketplace actions)
+      - name: Manual checkout (no external actions)
         shell: bash
         run: |
           set -e
-          git clone --no-tags --depth=1 "https://github.com/${GITHUB_REPOSITORY}.git" .
-          if [ -n "${GITHUB_SHA}" ]; then
-            git fetch --no-tags --prune --depth=1 origin "${GITHUB_SHA}"
-            git checkout "${GITHUB_SHA}"
-          fi
+          git init .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git fetch --depth=1 origin "$GITHUB_SHA"
+          git checkout --progress --force "$GITHUB_SHA"
 
-      - name: Locate MSBuild (vswhere)
-        id: msbuild
-        shell: pwsh
+      - name: Fetch submodules via HTTPS using GITHUB_TOKEN
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $vsw = "${Env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (-not (Test-Path $vsw)) { throw "vswhere not found at $vsw" }
-          $msbuild = & $vsw -latest -products * -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
-          if (-not $msbuild) { throw "MSBuild not found via vswhere" }
-          "MSBuild=$msbuild" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append
+          set -e
+          # Rewrite SSH submodule URLs to HTTPS for CI *only*
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          git submodule sync --recursive
+          git -c protocol.version=2 \
+              -c http.extraheader="AUTHORIZATION: bearer $GITHUB_TOKEN" \
+              submodule update --init --recursive --depth=1
 
+      - name: List solution projects (debug)
+        shell: bash
+        run: |
+          dotnet --version
+          dotnet sln SE-VIOS-DevFramework.sln list
       - name: Restore
         shell: pwsh
         run: |
