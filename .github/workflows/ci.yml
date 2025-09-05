@@ -34,31 +34,28 @@ jobs:
           git fetch --depth=1 origin "$GITHUB_SHA"
           git checkout --progress --force "$GITHUB_SHA"
 
-      - name: Fetch submodules via HTTPS using GITHUB_TOKEN (Windows-safe)
+      - name: Fetch submodules via HTTPS (public) — disable prompts (Windows-safe)
         shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # Make Git completely non-interactive
+          export GIT_TERMINAL_PROMPT=0
+          export GCM_INTERACTIVE=never
+          git config --global core.askPass ""
+          git config --global credential.interactive never
+          # On some Windows images, GCM is preconfigured; remove/override it:
+          git config --global --unset-all credential.helper || true
+          git config --system --unset credential.helper || true
 
-          # 1) Rewrite SSH → HTTPS inside .gitmodules (CI-only)
+          # Ensure all submodule URLs are HTTPS (not SSH) for CI
           if [ -f .gitmodules ]; then
             sed -i 's#git@github.com:#https://github.com/#g' .gitmodules
+            sed -i 's#ssh://git@github.com/#https://github.com/#g' .gitmodules
           fi
-
-          # 2) Sync submodule configs from .gitmodules to .git/config
           git submodule sync --recursive
 
-          # 3) Globally force HTTPS for any lingering ssh forms (both patterns)
-          git config --global url."https://github.com/".insteadOf git@github.com:
-          git config --global url."https://github.com/".insteadOf ssh://git@github.com/
-
-          # 4) (Critical) Set an auth header that ALL https://github.com requests will use
-          #    This works better than per-command -c on Windows when submodule clones spawn.
-          git config --global http.https://github.com/.extraheader "AUTHORIZATION: bearer ${GITHUB_TOKEN}"
-
-          # 5) Initialize & update recursively
-          git submodule update --init --recursive --depth=1
+          # Update — should succeed anonymously for public repos
+          GIT_CURL_VERBOSE=1 git submodule update --init --recursive --depth=1
 
       - name: List solution projects (debug)
         shell: bash
