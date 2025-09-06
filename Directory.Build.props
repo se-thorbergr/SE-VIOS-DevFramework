@@ -3,8 +3,5 @@
     <TargetFramework>netframework48</TargetFramework>
     <LangVersion>6</LangVersion>
     <RootNamespace>IngameScript</RootNamespace>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <Configurations>Release;Debug</Configurations>
-    <Platforms>x64</Platforms>
   </PropertyGroup>
 </Project>

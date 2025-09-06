@@ -8,3 +8,13 @@ obj/
 # MDK²
 mdk/
 
+# OS/editor noise
+.DS_Store
+Thumbs.db
+ehthumbs.db
+*.swp
+*.swo
+*.orig
+*.tmp
+~$*
+*~

@@ -1,5 +1,18 @@
+# Build
 bin/
 obj/
+# VSCode
 .vscode/
+# Rider
 .idea/
 
+# OS/editor noise
+.DS_Store
+Thumbs.db
+ehthumbs.db
+*.swp
+*.swo
+*.orig
+*.tmp
+~$*
+*~
