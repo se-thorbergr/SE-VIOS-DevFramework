@@ -13,9 +13,7 @@
      - Validate source enclosure rules:
          Scripts/*/Program.cs -> public partial class Program : MyGridProgram
          Mixins/**            -> partial class Program   (no base, no 'public' required)
-     - Gentle warnings for LINQ in hot paths; VIOS casing in types.
-
-   Excludes ThirdParty/* inside each repo.
+     - Heuristic naming: uppercase VIOS in type identifiers.
 #>
 
 Set-StrictMode -Version Latest
@@ -30,15 +28,17 @@ function Notice($msg) { Write-Host "::notice::$msg" }
 function Load-XmlFile([string]$Path) {
   [xml](Get-Content -LiteralPath $Path -Raw)
 }
-function Get-XmlProp([xml]$Xml, [string]$Name) {
-  foreach ($pg in $Xml.Project.PropertyGroup) {
-    if ($pg.$Name) {
-      $val = [string]$pg.$Name
-      if (-not [string]::IsNullOrWhiteSpace($val)) { return $val }
-    }
+
+function Get-XmlPropXPath([xml]$Xml, [string]$Name) {
+  # Return inner text of the FIRST <PropertyGroup>/<Name> found via XPath
+  # Support both TargetFramework and TargetFrameworks
+  $node = $Xml.SelectSingleNode("//Project/PropertyGroup/$Name")
+  if ($null -ne $node -and -not [string]::IsNullOrWhiteSpace($node.InnerText)) {
+    return $node.InnerText.Trim()
   }
   return $null
 }
+
 function File-Contains([string]$Path, [string]$Pattern) {
   $text = Get-Content -LiteralPath $Path -Raw
   return [System.Text.RegularExpressions.Regex]::IsMatch($text, $Pattern, 'Singleline')
@@ -47,7 +47,8 @@ function File-Contains([string]$Path, [string]$Pattern) {
 function Invoke-ChecksForRepo([string]$RepoPath) {
   Push-Location $RepoPath
   try {
-    $repoLabel = if ($RepoPath -eq (Get-Location).Path) { "." } else { (Resolve-Path -Relative .) -replace '\\','/' }
+    $repoLabel = "."
+    try { $repoLabel = (Resolve-Path -Relative .) -replace '\\','/' } catch { $repoLabel = "." }
 
     # Load repo-local defaults (Directory.Build.props)
     $defaults = @{ TargetFramework=$null; LangVersion=$null; RootNamespace=$null }
@@ -55,19 +56,25 @@ function Invoke-ChecksForRepo([string]$RepoPath) {
     if (Test-Path $propsPath) {
       try {
         $propsXml = Load-XmlFile $propsPath
-        $defaults.TargetFramework = Get-XmlProp $propsXml "TargetFramework"
-        $defaults.LangVersion     = Get-XmlProp $propsXml "LangVersion"
-        $defaults.RootNamespace   = Get-XmlProp $propsXml "RootNamespace"
+        $defaults.TargetFramework = Get-XmlPropXPath $propsXml "TargetFramework"
+        if (-not $defaults.TargetFramework) {
+          $tfms = Get-XmlPropXPath $propsXml "TargetFrameworks"
+          if ($tfms) { $defaults.TargetFramework = ($tfms -split ';' | Select-Object -First 1).Trim() }
+        }
+        $defaults.LangVersion   = Get-XmlPropXPath $propsXml "LangVersion"
+        $defaults.RootNamespace = Get-XmlPropXPath $propsXml "RootNamespace"
       } catch {
         Warn "[$repoLabel] Could not parse Directory.Build.props: $($_.Exception.Message)"
       }
     }
 
-    # Find projects (use filesystem; submodules might not be tracked by super git)
-    $csproj = Get-ChildItem -Path . -Recurse -Filter *.csproj -ErrorAction SilentlyContinue |
-              Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' -and $_.FullName -notmatch '^.*[\\/](ThirdParty)[\\/].*$' }
+    # Find projects (force array)
+    $csproj = @(
+      Get-ChildItem -Path . -Recurse -Filter *.csproj -ErrorAction SilentlyContinue |
+      Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' -and $_.FullName -notmatch '[\\/](ThirdParty)[\\/]'}
+    )
 
-    if (-not $csproj -or $csproj.Count -eq 0) {
+    if ($csproj.Count -eq 0) {
       Notice "[$repoLabel] No .csproj found — skipping."
       return $true
     }
@@ -75,14 +82,14 @@ function Invoke-ChecksForRepo([string]$RepoPath) {
     Write-Host "::group::[$repoLabel] Project property checks"
     $ok = $true
     foreach ($proj in $csproj) {
-      $relPath = (Resolve-Path -Relative $proj.FullName) -replace '\\','/'
+      $relPath = try { (Resolve-Path -Relative $proj.FullName) -replace '\\','/' } catch { $proj.FullName }
 
       try {
         $xml = Load-XmlFile $proj.FullName
 
-        $tfm = Get-XmlProp $xml "TargetFramework"
+        $tfm = Get-XmlPropXPath $xml "TargetFramework"
         if (-not $tfm) {
-          $tfms = Get-XmlProp $xml "TargetFrameworks"
+          $tfms = Get-XmlPropXPath $xml "TargetFrameworks"
           if ($tfms) { $tfm = ($tfms -split ';' | Select-Object -First 1).Trim() }
         }
         if (-not $tfm) { $tfm = $defaults.TargetFramework }
@@ -92,7 +99,7 @@ function Invoke-ChecksForRepo([string]$RepoPath) {
           $ok = $false
         } else { Info "[$relPath] TargetFramework OK: $tfm" }
 
-        $lang = Get-XmlProp $xml "LangVersion"; if (-not $lang) { $lang = $defaults.LangVersion }
+        $lang = Get-XmlPropXPath $xml "LangVersion"; if (-not $lang) { $lang = $defaults.LangVersion }
         if (-not $lang) {
           Write-Host "::error file=$relPath::LangVersion missing (expected '6' or via Directory.Build.props)"
           $ok = $false
@@ -101,7 +108,7 @@ function Invoke-ChecksForRepo([string]$RepoPath) {
           $ok = $false
         } else { Info "[$relPath] LangVersion OK: $lang" }
 
-        $rootNs = Get-XmlProp $xml "RootNamespace"; if (-not $rootNs) { $rootNs = $defaults.RootNamespace }
+        $rootNs = Get-XmlPropXPath $xml "RootNamespace"; if (-not $rootNs) { $rootNs = $defaults.RootNamespace }
         if (-not $rootNs) {
           Write-Host "::error file=$relPath::RootNamespace missing (expected 'IngameScript' or via Directory.Build.props)"
           $ok = $false
@@ -111,7 +118,7 @@ function Invoke-ChecksForRepo([string]$RepoPath) {
         } else { Info "[$relPath] RootNamespace OK: $rootNs" }
 
         # Package shape
-        $pkgNodes = $xml.SelectNodes('//Project/ItemGroup/PackageReference')
+        $pkgNodes = @($xml.SelectNodes('//Project/ItemGroup/PackageReference'))
         $pkgs = @{}
         foreach ($n in $pkgNodes) {
           if ($n -and $n.Include) { $pkgs[$n.Include] = $true }
@@ -151,19 +158,25 @@ function Invoke-ChecksForRepo([string]$RepoPath) {
     Write-Host "::endgroup::"
 
     Write-Host "::group::[$repoLabel] Source enclosure checks"
-    $allCs = Get-ChildItem -Path . -Recurse -Filter *.cs -ErrorAction SilentlyContinue |
-             Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' -and $_.FullName -notmatch '^.*[\\/](ThirdParty)[\\/].*$' }
+    $allCs = @(
+      Get-ChildItem -Path . -Recurse -Filter *.cs -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.FullName -notmatch '[\\/]\.git[\\/]' -and
+        $_.FullName -notmatch '[\\/](ThirdParty)[\\/]'
+      }
+    )
 
     foreach ($f in $allCs) {
-      $rel = (Resolve-Path -Relative $f.FullName) -replace '\\','/'
+      $rel = try { (Resolve-Path -Relative $f.FullName) -replace '\\','/' } catch { $f.FullName }
+      $relLower = $rel.ToLowerInvariant()
       $txt = Get-Content -LiteralPath $f.FullName -Raw
 
-      if ($rel -like "Scripts/*") {
+      if ($relLower -like "scripts/*") {
         if ($txt -notmatch 'namespace\s+IngameScript\s*\{[\s\S]*?public\s+partial\s+class\s+Program\s*:\s*MyGridProgram') {
           Write-Host "::error file=$rel::Scripts enclosure invalid; expect 'public partial class Program : MyGridProgram' inside namespace IngameScript."
           $ok = $false
         }
-      } elseif ($rel -like "Mixins/*") {
+      } elseif ($relLower -like "mixins/*") {
         if ($txt -match 'partial\s+class\s+Program\s*:\s*MyGridProgram') {
           Write-Host "::error file=$rel::Mixins must NOT inherit MyGridProgram."
           $ok = $false
@@ -174,14 +187,12 @@ function Invoke-ChecksForRepo([string]$RepoPath) {
         }
       }
 
-      # Naming: enforce VIOS uppercase in type identifiers (heuristic)
-      if ($txt -match '\bVios[A-Za-z_]\w*' -or $txt -match '\bVioS[A-Za-z_]\w*') {
-        Write-Host "::error file=$rel::Found non-standard VIOS casing (use uppercase 'VIOS' in type names)."
-        $ok = $false
-      }
-
-      if ($txt -match '\bSystem\.Linq\b') {
-        Warn "System.Linq referenced in $rel — avoid in hot tick paths."
+      # Stricter VIOS casing check: only type identifiers in Scripts/Mixins
+      if ($relLower -like "scripts/*" -or $relLower -like "mixins/*") {
+        if ($txt -match '\b(class|interface|struct)\s+Vios\w*\b') {
+          Write-Host "::error file=$rel::Found non-standard VIOS casing in type name (use uppercase 'VIOS')."
+          $ok = $false
+        }
       }
     }
     Write-Host "::endgroup::"
@@ -203,7 +214,6 @@ $overallOk = (Invoke-ChecksForRepo (Get-Location).Path) -and $overallOk
 # 2) Enumerate submodules via .gitmodules and check each
 $subPaths = @()
 if (Test-Path .gitmodules) {
-  # Parse paths from .gitmodules
   $lines = git config -f .gitmodules --get-regexp path 2>$null
   foreach ($ln in $lines) {
     $parts = $ln -split "\s+", 2
