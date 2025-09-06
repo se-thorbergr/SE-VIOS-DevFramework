@@ -1,13 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>netframework48</TargetFramework>
-    <LangVersion>6</LangVersion>
-    <RootNamespace>IngameScript</RootNamespace>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <Configurations>Release;Debug</Configurations>
-    <Platforms>x64</Platforms>
+    <!-- MDK² role: Programmable Block script -->
+    <Mdk2ProjectType>mdk2pbscript</Mdk2ProjectType>
+
+    <!-- All standard knobs (TargetFramework, LangVersion, RootNamespace, etc.)
+         are inherited from the repo's Directory.Build.props -->
   </PropertyGroup>
+
   <ItemGroup>
+    <!-- PB scripts need Packager + Analyzers + References -->
     <PackageReference Include="Mal.Mdk2.PbAnalyzers" Version="2.1.13">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -18,10 +19,13 @@
     </PackageReference>
     <PackageReference Include="Mal.Mdk2.References" Version="2.2.4" />
   </ItemGroup>
+
+  <!-- Optional: PBs typically reference mixins; you can add ProjectReference here
+       after creation; we keep the template clean. -->
+
   <ItemGroup>
     <None Remove="Instructions.readme" />
     <AdditionalFiles Include="Instructions.readme" />
     <AdditionalFiles Include="thumb.png" />
   </ItemGroup>
 </Project>
-

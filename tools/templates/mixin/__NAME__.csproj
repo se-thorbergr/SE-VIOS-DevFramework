@@ -1,11 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>netframework48</TargetFramework>
-    <LangVersion>6</LangVersion>
-    <RootNamespace>IngameScript</RootNamespace>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- MDK² role: Mixin (sources are merged into PB at pack time) -->
+    <Mdk2ProjectType>mdk2mixin</Mdk2ProjectType>
+
+    <!-- All standard knobs (TargetFramework, LangVersion, RootNamespace, etc.)
+         are inherited from the repo's Directory.Build.props -->
   </PropertyGroup>
+
   <ItemGroup>
+    <!-- Mixins DO NOT include PbPackager -->
     <PackageReference Include="Mal.Mdk2.PbAnalyzers" Version="2.1.13">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -13,4 +16,3 @@
     <PackageReference Include="Mal.Mdk2.References" Version="2.2.4" />
   </ItemGroup>
 </Project>
-

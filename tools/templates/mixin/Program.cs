@@ -7,4 +7,3 @@ namespace IngameScript
         // e.g., interfaces, kernel pieces, modules, etc.
     }
 }
-
