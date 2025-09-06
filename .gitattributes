@@ -1,9 +1,52 @@
+# Default: normalize to LF in repo; let tooling decide on checkout unless overridden below
 *           text=auto eol=lf
+
+# Windows-only text that should stay CRLF on checkout
 *.sln       text eol=crlf
 *.bat       text eol=crlf
 *.cmd       text eol=crlf
-*.ps1       text eol=crlf
-*.ini       text eol=crlf
+
+# Scripts & code (LF is safest across OS/CI)
+*.ps1       text eol=lf
 *.sh        text eol=lf
 *.cs        text eol=lf
+*.csproj    text eol=lf
+*.props     text eol=lf
+*.targets   text eol=lf
+*.fs        text eol=lf
+*.vb        text eol=lf
 
+# Config & metadata (LF)
+*.editorconfig text eol=lf
+*.gitattributes text eol=lf
+*.gitmodules   text eol=lf
+*.md          text eol=lf
+*.txt         text eol=lf
+*.xml         text eol=lf
+*.json        text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+*.ini         text eol=lf
+
+# Web/assets (LF text; mark binaries)
+*.svg        text eol=lf
+*.css        text eol=lf
+*.js         text eol=lf
+
+# Binary files (never modify line endings)
+*.png        -text
+*.jpg        -text
+*.jpeg       -text
+*.gif        -text
+*.ico        -text
+*.zip        -text
+*.7z         -text
+*.pdf        -text
+*.dll        -text
+*.exe        -text
+
+# Mermaid source (text)
+*.mmd        text eol=lf
+
+# Space Engineers thumbnails in script projects
+thumb.png    -text
