@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netframework48</TargetFramework>
+    <LangVersion>6</LangVersion>
+    <RootNamespace>IngameScript</RootNamespace>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Mal.Mdk2.PbAnalyzers" Version="2.1.13">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Mal.Mdk2.References" Version="2.2.4" />
+  </ItemGroup>
+</Project>
+

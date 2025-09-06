@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>netframework48</TargetFramework>
+    <LangVersion>6</LangVersion>
+    <RootNamespace>IngameScript</RootNamespace>
+  </PropertyGroup>
+</Project>
+
