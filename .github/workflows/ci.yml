@@ -124,20 +124,47 @@ jobs:
       pull-requests: read
       contents: read
     steps:
-      - name: Load PR body and validate checklist
+      - name: Validate PR body checklist
+        # Use the built-in GITHUB_EVENT_PATH env var; no extra actions needed
         shell: pwsh
         env:
-          EVENT_PATH: ${{ github.event_path }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          $json = Get-Content -Raw -Path $Env:EVENT_PATH | ConvertFrom-Json
-          $body = $json.pull_request.body
+          # 1) Load the event payload first
+          if (-not $Env:GITHUB_EVENT_PATH -or -not (Test-Path $Env:GITHUB_EVENT_PATH)) {
+            Write-Warning "GITHUB_EVENT_PATH is missing; will fall back to GitHub API."
+            $json = $null
+          } else {
+            $json = Get-Content -Raw -Path $Env:GITHUB_EVENT_PATH | ConvertFrom-Json
+          }
+
+          $body = $null
+          if ($json -and $json.pull_request -and $json.pull_request.body) {
+            $body = [string]$json.pull_request.body
+          }
+
+          # 2) Fallback: fetch PR body via API (sometimes event body is null if edited after opening)
+          if (-not $body -and $Env:REPO -and $Env:PR_NUMBER) {
+            try {
+              $headers = @{ Authorization = "Bearer $Env:GITHUB_TOKEN"; "X-GitHub-Api-Version" = "2022-11-28" }
+              $url = "https://api.github.com/repos/$($Env:REPO)/pulls/$($Env:PR_NUMBER)"
+              $resp = Invoke-RestMethod -Method GET -Uri $url -Headers $headers
+              if ($resp -and $resp.body) { $body = [string]$resp.body }
+            } catch {
+              Write-Warning "Fallback API call to load PR body failed: $($_.Exception.Message)"
+            }
+          }
+
           if (-not $body) {
             Write-Error "PR body is empty. Please include the PR Acceptance Checklist."
             exit 1
           }
 
-          # Find the acceptance section and count checkboxes
-          $hasSection = $body -match '(?s)##\s*PR\s*Acceptance\s*Checklist.*'
+          # 3) Validate presence of section header and >= 5 checkboxes
+          $hasSection = [regex]::IsMatch($body, '(?s)^\s*##\s*PR\s*Acceptance\s*Checklist\b', 'IgnoreCase, Multiline')
+          # Checkboxes must look like: "- [ ] ..." or "- [x] ..."
           $checkboxCount = ([regex]::Matches($body, '^- \[( |x|X)\] ', 'Multiline')).Count
 
           if (-not $hasSection) {
@@ -145,7 +172,7 @@ jobs:
             exit 1
           }
           if ($checkboxCount -lt 5) {
-            Write-Error "Checklist appears incomplete (found $checkboxCount checkbox line(s)). Ensure all required items are present."
+            Write-Error "Checklist appears incomplete (found $checkboxCount checkbox line(s)). Ensure at least 5 items are present."
             exit 1
           }
 
