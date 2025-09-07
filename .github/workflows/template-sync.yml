@@ -1,0 +1,84 @@
+name: Template Sync
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches:
+      - main
+      - 'feature/**'
+      - 'chore/**'
+      - 'fix/**'
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: 'Run STRICT template sync?'
+        type: boolean
+        default: false
+
+jobs:
+  # Pre-merge RELAXED verification (required status check)
+  sync-relaxed:
+    name: Verify templates (RELAXED)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Show git versions
+        run: |
+          git --version
+          pwsh -v
+
+      - name: Make bash verifier executable
+        run: chmod +x tools/verify-templates-sync.sh
+
+      - name: Run bash verifier (RELAXED)
+        env:
+          MODE: RELAXED
+        run: |
+          ./tools/verify-templates-sync.sh
+
+      - name: Run PowerShell verifier (RELAXED)
+        shell: pwsh
+        env:
+          MODE: RELAXED
+        run: |
+          ./tools/Verify-TemplatesSync.ps1
+
+  # Optional STRICT verification:
+  # - runs when PR has label "strict-template-sync"
+  # - or when workflow_dispatch strict=true
+  sync-strict:
+    name: Verify templates (STRICT)
+    runs-on: ubuntu-latest
+    if: >
+      contains(fromJson('["pull_request"]'), github.event_name)
+      && contains(join(github.event.pull_request.labels.*.name, ','), 'strict-template-sync')
+      || (github.event_name == 'workflow_dispatch' && inputs.strict == true)
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Make bash verifier executable
+        run: chmod +x tools/verify-templates-sync.sh
+
+      - name: Run bash verifier (STRICT)
+        env:
+          MODE: STRICT
+        run: |
+          ./tools/verify-templates-sync.sh
+
+      - name: Run PowerShell verifier (STRICT)
+        shell: pwsh
+        env:
+          MODE: STRICT
+        run: |
+          ./tools/Verify-TemplatesSync.ps1
+
