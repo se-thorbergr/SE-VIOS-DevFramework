@@ -2,7 +2,7 @@
 
 **Product:** Viking Industries Operating System (**VIOS**)
 **Context:** Space Engineers Programmable Block • MDK²‑SE • VS Code
-**Version:** v0.1.1 (naming rule applied; MDK² project layout aligned)
+**Version:** v0.1.2 (adds Template Sync policy §2.1, dual verifiers + CI gate, scaffolding & LF/BOM notes; repo layout updated)
 
 > This is the **canonical architecture reference** for contributors and Codex. It captures the complete scope: kernel, scheduler, router, UI, storage, pools, stats, modules, repository layout, and diagrams.
 
@@ -71,6 +71,7 @@ namespace IngameScript
 
 The repo enforces project shape via **template sync** in two modes (RELAXED default, STRICT optional).  
 See **docs/policies/VIOS-Template-Sync-Policy.md**.
+For local checks see CONTRIBUTING.md → Template Sync (LOCAL).
 
 - **Static files (exact match):** `.gitignore`, `.gitattributes`, `.editorconfig`, `Directory.Build.props`; PB `*.mdk.ini` must contain `type=programmableblock`.
 - **Semi-static (schema strict):** `*.csproj` (exactly one per submodule).
@@ -84,6 +85,10 @@ See **docs/policies/VIOS-Template-Sync-Policy.md**.
 - PowerShell: `tools/Verify-TemplatesSync.ps1`
 
 RELAXED mode warns on `.csproj` drift (after ignoring XML comments and ProjectReference-only groups). STRICT mode fails on that drift.
+
+### 2.2 Inherited build knobs
+
+These TFM/LangVersion knobs are inherited via Directory.Build.props; do not set them in individual .csproj files.
 
 ---
 
@@ -165,7 +170,7 @@ RELAXED mode warns on `.csproj` drift (after ignoring XML comments and ProjectRe
 │  ├─ verify-templates-sync.sh               # Bash verifier (RELAXED/STRICT)
 │  ├─ Verify-TemplatesSync.ps1               # PowerShell verifier (RELAXED/STRICT)
 │  ├─ scaffold-submodule.sh                  # Submodule scaffolder (pbscript/mixin)
-│  └─ Scaffold-Submodule.ps1                 # Windows variant│
+│  └─ Scaffold-Submodule.ps1                 # Windows variant
 │
 ├─ .githooks/
 │  ├─ pre-commit                             # Calls stampers; re-stages changed files
@@ -174,7 +179,7 @@ RELAXED mode warns on `.csproj` drift (after ignoring XML comments and ProjectRe
 └─ .github/
    ├─ workflows/
    │  ├─ ci.yml                              # Build + checks + PR review comments + PR checklist gate
-   │  ├─ docs-validate.yml
+   │  ├─ docs-validate.yml                   # Docs lint & link checks (Markdown/anchors/TOC; Prettier/markdownlint)
    │  └─ verify-templates-sync.yml           # Template sync pre-merge job
    ├─ ISSUE_TEMPLATE/
    │  ├─ bug_report.yml                      # Bug template
@@ -227,7 +232,7 @@ The scaffolder:
 ### 3.6 Line Endings, BOM, and Prettier
 
 Verifiers normalize **LF/CRLF** and ignore UTF-8 BOMs. They also ignore XML comments and pure ProjectReference groups when comparing `*.csproj`.  
-Markdown is formatted with Prettier; use dash (`-`) list bullets to match repo formatting.
+Markdown is formatted with Prettier; dash (-) bullets are preferred and may be auto-rewritten on save.
 
 ---
 
@@ -623,6 +628,7 @@ stateDiagram-v2
 ## 17. Appendix: Minimal PB Bootstrap
 
 ```csharp
+// Enclosure rule: all code inside IngameScript.Program
 namespace IngameScript
 {
   public partial class Program : MyGridProgram
