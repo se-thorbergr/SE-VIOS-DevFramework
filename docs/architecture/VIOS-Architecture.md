@@ -67,14 +67,32 @@ namespace IngameScript
 12. **Persistence & Config:** Use PB `Storage` for state and `Me.CustomData` (via `MyIni`) for configuration.
 13. **Whitelist Compliance:** Use only PB‑allowed APIs; avoid LINQ/allocations in hot paths and any forbidden namespaces.
 
+### 2.1 Template Sync & MDK² Invariants
+
+The repo enforces project shape via **template sync** in two modes (RELAXED default, STRICT optional).  
+See **docs/policies/VIOS-Template-Sync-Policy.md**.
+
+- **Static files (exact match):** `.gitignore`, `.gitattributes`, `.editorconfig`, `Directory.Build.props`; PB `*.mdk.ini` must contain `type=programmableblock`.
+- **Semi-static (schema strict):** `*.csproj` (exactly one per submodule).
+  - **PB (`mdk2pbscript`):** must include `<Mdk2ProjectType>mdk2pbscript</Mdk2ProjectType>` and packages `Mal.Mdk2.PbPackager`, `Mal.Mdk2.PbAnalyzers`, `Mal.Mdk2.References`.
+  - **Mixin (`mdk2mixin`):** must include `<Mdk2ProjectType>mdk2mixin</Mdk2ProjectType>`, **no** PbPackager; require `Mal.Mdk2.PbAnalyzers` + `Mal.Mdk2.References`.
+- **Flexible code:** PB must declare `public partial class Program : MyGridProgram`; mixins require at least one `partial class Program` (no visibility/base), and **must not** inherit `MyGridProgram`.
+
+**Verifiers**
+
+- Bash: `tools/verify-templates-sync.sh`
+- PowerShell: `tools/Verify-TemplatesSync.ps1`
+
+RELAXED mode warns on `.csproj` drift (after ignoring XML comments and ProjectReference-only groups). STRICT mode fails on that drift.
+
 ---
 
 ## 3. Repository & Project Layout (MDK² — Detailed Canonical)
 
 ```
 <root>/
-├─ SE-VIOS-DevFramework.sln                 # Solution wiring PB + mixins (optional but recommended)
-├─ Directory.Build.props                    # Enforce net48 + C#6 + IngameScript root namespace
+├─ SE-VIOS-DevFramework.sln                  # Solution wiring PB + mixins (optional but recommended)
+├─ Directory.Build.props                     # Enforce net48 + C#6 + IngameScript root namespace
 ├─ .editorconfig                             # Coding style (indentation, C#6 hints)
 ├─ .gitignore
 ├─ README.md                                 # CI badge + quick start
@@ -143,7 +161,11 @@ namespace IngameScript
 │  ├─ license_header.tmpl                    # Single-source header template
 │  ├─ add_license_header.sh                  # Bash stamper (reads the template)
 │  ├─ Add-LicenseHeader.ps1                  # PowerShell stamper (reads the template)
-│  └─ check-architecture.ps1                 # CI guardrails (TFM/LangVersion/naming/enclosure)
+│  ├─ check-architecture.ps1                 # CI guardrails (TFM/LangVersion/naming/enclosure)
+│  ├─ verify-templates-sync.sh               # Bash verifier (RELAXED/STRICT)
+│  ├─ Verify-TemplatesSync.ps1               # PowerShell verifier (RELAXED/STRICT)
+│  ├─ scaffold-submodule.sh                  # Submodule scaffolder (pbscript/mixin)
+│  └─ Scaffold-Submodule.ps1                 # Windows variant│
 │
 ├─ .githooks/
 │  ├─ pre-commit                             # Calls stampers; re-stages changed files
@@ -151,7 +173,9 @@ namespace IngameScript
 │
 └─ .github/
    ├─ workflows/
-   │  └─ ci.yml                              # Build + checks + PR review comments + PR checklist gate
+   │  ├─ ci.yml                              # Build + checks + PR review comments + PR checklist gate
+   │  ├─ docs-validate.yml
+   │  └─ verify-templates-sync.yml           # Template sync pre-merge job
    ├─ ISSUE_TEMPLATE/
    │  ├─ bug_report.yml                      # Bug template
    │  └─ module_proposal.yml                 # Module proposal template
@@ -181,6 +205,29 @@ namespace IngameScript
 
 - Solution file lists the PB + mixins projects; CI builds the solution with MSBuild in **Release**.
 - `tools/check-architecture.ps1` is the single source for policy checks (enclosure, net48/C#6, headers, naming, PB whitelist hints).
+
+### 3.5 Scaffolding & Naming
+
+Use the scaffolding helpers to add PB scripts or mixins:
+
+- Linux/macOS: `tools/scaffold-submodule.sh pbscript|mixin <path> <remote> <ProjectName> [--sln <sln>]`
+- Windows: `tools/Scaffold-Submodule.ps1 ...` (same parameters)
+
+The scaffolder:
+
+- Adds the submodule and copies template infra (`.gitignore`, `.gitattributes`, `.editorconfig`, `Directory.Build.props`).
+- Creates the appropriate `__NAME__.csproj` with `<Mdk2ProjectType>`.
+- For PB scripts, creates the minimal `Program.cs` and `${Project}.mdk.ini` with `type=programmableblock`.
+
+**Naming**
+
+- PB script project files typically match the folder (e.g., `VIOS.Minimal.csproj`) but the verifiers tolerate any single `*.csproj` per folder.
+- Modules and Components must use **neutral** class names (no `VIOS` prefix) but implement branded interfaces from **VIOS.Core**.
+
+### 3.6 Line Endings, BOM, and Prettier
+
+Verifiers normalize **LF/CRLF** and ignore UTF-8 BOMs. They also ignore XML comments and pure ProjectReference groups when comparing `*.csproj`.  
+Markdown is formatted with Prettier; use dash (`-`) list bullets to match repo formatting.
 
 ---
 
@@ -217,6 +264,8 @@ namespace IngameScript
 
   - **Modules:** neutral class names implementing `IVIOSModule` (e.g., Power, ScreenMgr).
   - **Components:** small neutral building blocks (discovery, naming, screen primitives) consumed by core/modules.
+
+See `.github/workflows/verify-templates-sync.yml` for the pre-merge template sync gate (RELAXED by default; set `MODE: STRICT` to hard-fail on semi-static drift).
 
 ---
 
