@@ -191,10 +191,11 @@ function Check-PbScript([string]$modPath) {
   $programPath = Join-Path $modPath 'Program.cs'
   if (-not (Test-Path -LiteralPath $programPath)) {
     Add-Missing "$programPath"
-  } else {
-    $hasEnclosure = Select-String -LiteralPath $programPath -Pattern 'public\s+partial\s+class\s+Program\s*:\s*MyGridProgram' -Quiet
-    if (-not $hasEnclosure) { Add-Violation "$programPath must declare 'public partial class Program : MyGridProgram'" }
-  }
+  } else
+    {
+      $hasEnclosure = Select-String -LiteralPath $programPath -Pattern 'public\s+partial\s+class\s+Program\s*:\s*MyGridProgram' -Quiet
+      if (-not $hasEnclosure) { Add-Violation "$programPath must declare 'public partial class Program : MyGridProgram'" }
+    }
 
   # Exactly one .csproj
   $csproj = Get-OneFileOrEmpty $modPath '*.csproj'

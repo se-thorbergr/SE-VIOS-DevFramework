@@ -11,7 +11,7 @@ set -euo pipefail
 #
 # Flexible rules:
 # - MIXIN: filenames are flexible. Require at least one *.cs declaring `partial class Program` (no visibility/base).
-# - PB: Program.cs is not hard-diffed; we only enforce the MyGridProgram enclosure.
+# - PB: Program.cs is not hard-diffed; we only enforce the MyGridProgram enclosure and require the file to exist.
 # - Both: .csproj name can vary; must be exactly one and content validated.
 
 # ---------------------------------------------------------------------
@@ -22,7 +22,7 @@ MX_TPL="tools/templates/mixin"
 MODE="${MODE:-RELAXED}"  # RELAXED (default) or STRICT
 
 # File maps per kind (template path -> submodule path) using __NAME__ placeholder
-# PB scripts: keep Program.cs & __NAME__.mdk.ini comparisons; csproj name is resolved dynamically
+# PB scripts: keep __NAME__.mdk.ini comparisons; csproj name is resolved dynamically
 PB_FILES=(
   ".gitignore:.gitignore"
   ".gitattributes:.gitattributes"
@@ -30,7 +30,7 @@ PB_FILES=(
   "Directory.Build.props:Directory.Build.props"
   "__NAME__.mdk.ini:__NAME__.mdk.ini"
 )
-# Mixins: compare only infra & csproj; code files are flexible
+# Mixins: compare only infra; csproj validated separately; code files are flexible
 MX_FILES=(
   ".gitignore:.gitignore"
   ".gitattributes:.gitattributes"
@@ -140,7 +140,7 @@ check_pbscript() {
   local proj; proj="$(basename "$mod")"
   echo "== Scripts (pbscript) :: $mod =="
 
-  # Presence + content vs template (infra + Program.cs + nominal .mdk.ini)
+  # Presence + content vs template (infra + nominal .mdk.ini)
   for map in "${PB_FILES[@]}"; do
     IFS=: read -r src dst <<<"$map"
     local tpl="$PB_TPL/$src"
@@ -152,9 +152,14 @@ check_pbscript() {
     diff_file "$tpl" "$out" "$proj" static || true
   done
 
-  # Enclosure: public partial class Program : MyGridProgram
-  if ! grep -Eq 'public[[:space:]]+partial[[:space:]]+class[[:space:]]+Program[[:space:]]*:[[:space:]]*MyGridProgram' "$mod/Program.cs"; then
-    violation "$mod/Program.cs must declare 'public partial class Program : MyGridProgram'"
+  # Program.cs must exist and declare the enclosure (not hard-diffed)
+  local pb_prog="$mod/Program.cs"
+  if [[ ! -f "$pb_prog" ]]; then
+    violation "$mod is missing Program.cs (required for PB scripts)"
+  else
+    if ! grep -Eq 'public[[:space:]]+partial[[:space:]]+class[[:space:]]+Program[[:space:]]*:[[:space:]]*MyGridProgram' "$pb_prog"; then
+      violation "$pb_prog must declare 'public partial class Program : MyGridProgram'"
+    fi
   fi
 
   # csproj: require exactly one, and validate role + package set; also try best-effort diff to template

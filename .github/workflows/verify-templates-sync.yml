@@ -6,18 +6,21 @@ on:
   push:
     branches:
       - main
-      - 'feature/**'
-      - 'chore/**'
-      - 'fix/**'
+      - "feature/**"
+      - "chore/**"
+      - "fix/**"
   workflow_dispatch:
     inputs:
       strict:
-        description: 'Run STRICT template sync?'
+        description: "Run STRICT template sync?"
         type: boolean
         default: false
 
 jobs:
-  # Pre-merge RELAXED verification (required status check)
+  # -------------------------------------------------------------------
+  # Pre-merge RELAXED verification (required baseline)
+  # Always runs on PRs and on pushes to tracked branches.
+  # -------------------------------------------------------------------
   sync-relaxed:
     name: Verify templates (RELAXED)
     runs-on: ubuntu-latest
@@ -28,7 +31,7 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Show git versions
+      - name: Show tool versions
         run: |
           git --version
           pwsh -v
@@ -39,26 +42,30 @@ jobs:
       - name: Run bash verifier (RELAXED)
         env:
           MODE: RELAXED
-        run: |
-          ./tools/verify-templates-sync.sh
+        run: ./tools/verify-templates-sync.sh
 
       - name: Run PowerShell verifier (RELAXED)
         shell: pwsh
         env:
           MODE: RELAXED
-        run: |
-          ./tools/Verify-TemplatesSync.ps1
+        run: ./tools/Verify-TemplatesSync.ps1
 
+  # -------------------------------------------------------------------
   # Optional STRICT verification:
-  # - runs when PR has label "strict-template-sync"
-  # - or when workflow_dispatch strict=true
+  # - Runs when a PR has the "strict-template-sync" label
+  # - OR when manually triggered via workflow_dispatch with strict=true
+  #
+  # Notes:
+  # * This job is additive; RELAXED still runs and reports drift as warnings.
+  # * STRICT promotes .csproj "semi-static" drift to failures.
+  # -------------------------------------------------------------------
   sync-strict:
     name: Verify templates (STRICT)
     runs-on: ubuntu-latest
     if: >
-      contains(fromJson('["pull_request"]'), github.event_name)
-      && contains(join(github.event.pull_request.labels.*.name, ','), 'strict-template-sync')
-      || (github.event_name == 'workflow_dispatch' && inputs.strict == true)
+      (github.event_name == 'workflow_dispatch' && inputs.strict == true) ||
+      (github.event_name == 'pull_request' &&
+       contains(join(github.event.pull_request.labels.*.name, ','), 'strict-template-sync'))
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
@@ -66,19 +73,60 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Show tool versions
+        run: |
+          git --version
+          pwsh -v
+
       - name: Make bash verifier executable
         run: chmod +x tools/verify-templates-sync.sh
 
       - name: Run bash verifier (STRICT)
         env:
           MODE: STRICT
-        run: |
-          ./tools/verify-templates-sync.sh
+        run: ./tools/verify-templates-sync.sh
 
       - name: Run PowerShell verifier (STRICT)
         shell: pwsh
         env:
           MODE: STRICT
-        run: |
-          ./tools/Verify-TemplatesSync.ps1
+        run: ./tools/Verify-TemplatesSync.ps1
 
+  # -------------------------------------------------------------------
+  # Gate job: make a single required status check enforce STRICT when needed.
+  # Branch protection should mark THIS job ("Template Sync (gate)") as required.
+  # Behavior:
+  #   - RELAXED must always succeed.
+  #   - If label "strict-template-sync" is present on PR, STRICT must succeed.
+  #   - If workflow_dispatch strict=true, STRICT must succeed.
+  # -------------------------------------------------------------------
+  template-sync-gate:
+    name: Template Sync (gate)
+    runs-on: ubuntu-latest
+    needs: [sync-relaxed, sync-strict]
+    if: always() # always run to aggregate results
+    env:
+      RELAXED_RESULT: ${{ needs.sync-relaxed.result }}
+      STRICT_RESULT: ${{ needs.sync-strict.result }}
+      REQUIRE_STRICT: ${{ (github.event_name == 'workflow_dispatch' && inputs.strict == true) || (github.event_name == 'pull_request' && contains(join(github.event.pull_request.labels.*.name, ','), 'strict-template-sync')) }}
+    steps:
+      - name: Summarize lane results
+        run: |
+          echo "RELAXED_RESULT=${RELAXED_RESULT}"
+          echo "STRICT_RESULT=${STRICT_RESULT:-skipped}"
+          echo "REQUIRE_STRICT=${REQUIRE_STRICT}"
+
+      - name: Enforce policy
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          # RELAXED must always pass
+          if [ "${RELAXED_RESULT}" != "success" ]; then
+            fail "RELAXED lane failed (result=${RELAXED_RESULT})."
+          fi
+          # STRICT required when requested via label or manual input
+          if [ "${REQUIRE_STRICT}" = "true" ]; then
+            if [ "${STRICT_RESULT}" != "success" ]; then
+              fail "STRICT lane required but not successful (result=${STRICT_RESULT:-none})."
+            fi
+          fi
+          echo "Gate OK."
