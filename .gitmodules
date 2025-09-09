@@ -1,18 +1,18 @@
 [submodule "Mixins/VIOS.Core"]
 	path = Mixins/VIOS.Core
-	url = git@github.com:se-thorbergr/VIOS.Core.git
+	url = https://github.com/se-thorbergr/VIOS.Core.git
 [submodule "Scripts/VIOS.Bootstrap"]
 	path = Scripts/VIOS.Bootstrap
-	url = git@github.com:se-thorbergr/VIOS.Bootstrap.git
+	url = https://github.com/se-thorbergr/VIOS.Bootstrap.git
 [submodule "Scripts/VIOS.DevSandbox"]
 	path = Scripts/VIOS.DevSandbox
-	url = git@github.com:se-thorbergr/VIOS.DevSandbox.git
+	url = https://github.com/se-thorbergr/VIOS.DevSandbox.git
 [submodule "Scripts/VIOS.Minimal"]
 	path = Scripts/VIOS.Minimal
-	url = git@github.com:se-thorbergr/VIOS.Minimal.git
+	url = https://github.com/se-thorbergr/VIOS.Minimal.git
 [submodule "Mixins/Modules/ScreenMgr"]
 	path = Mixins/Modules/ScreenMgr
-	url = git@github.com:se-thorbergr/ScreenMgr.git
+	url = https://github.com/se-thorbergr/ScreenMgr.git
 [submodule "Mixins/Modules/Power"]
 	path = Mixins/Modules/Power
-	url = git@github.com:se-thorbergr/Power.git
+	url = https://github.com/se-thorbergr/Power.git
