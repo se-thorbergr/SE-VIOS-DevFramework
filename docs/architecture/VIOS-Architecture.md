@@ -85,6 +85,7 @@ For local checks see CONTRIBUTING.md → Template Sync (LOCAL).
 - PowerShell: `tools/Verify-TemplatesSync.ps1`
 
 RELAXED mode warns on `.csproj` drift (after ignoring XML comments and ProjectReference-only groups). STRICT mode fails on that drift.
+CI runs RELAXED by default; add PR label **`strict-template-sync`** to run a STRICT lane in GitHub Actions.
 
 ### 2.2 Inherited build knobs
 
@@ -223,6 +224,8 @@ The scaffolder:
 - Adds the submodule and copies template infra (`.gitignore`, `.gitattributes`, `.editorconfig`, `Directory.Build.props`).
 - Creates the appropriate `__NAME__.csproj` with `<Mdk2ProjectType>`.
 - For PB scripts, creates the minimal `Program.cs` and `${Project}.mdk.ini` with `type=programmableblock`.
+- For Mixins, creates `__NAME__.cs` mapped to `<ClassName>.cs` (choose with `--class <Name>`), replaces `__NAME__` and `__CLASS__`,
+  and removes `// SCAFFOLD-STRIP-*` blocks during copy.
 
 **Naming**
 

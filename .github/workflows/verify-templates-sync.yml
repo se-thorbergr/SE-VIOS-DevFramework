@@ -116,6 +116,25 @@ jobs:
           echo "STRICT_RESULT=${STRICT_RESULT:-skipped}"
           echo "REQUIRE_STRICT=${REQUIRE_STRICT}"
 
+      - name: Job summary (nice view)
+        run: |
+          {
+            echo "## Template Sync — Gate Summary"
+            echo
+            echo "- **RELAXED**: \`${RELAXED_RESULT}\`"
+            if [ "${REQUIRE_STRICT}" = "true" ]; then
+              echo "- **STRICT** (required): \`${STRICT_RESULT:-skipped}\`"
+            else
+              echo "- **STRICT** (optional): \`${STRICT_RESULT:-skipped}\`"
+            fi
+            echo
+            if [ "${RELAXED_RESULT}" = "success" ] && { [ "${REQUIRE_STRICT}" != "true" ] || [ "${STRICT_RESULT}" = "success" ]; }; then
+              echo "✅ **Gate OK** — requirements satisfied."
+            else
+              echo "❌ **Gate failed** — see logs above."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Enforce policy
         run: |
           fail() { echo "::error::$1"; exit 1; }

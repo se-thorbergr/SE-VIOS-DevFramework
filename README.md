@@ -1,4 +1,5 @@
 [![CI](https://github.com/se-thorbergr/SE-VIOS-DevFramework/actions/workflows/ci.yml/badge.svg)](https://github.com/se-thorbergr/SE-VIOS-DevFramework/actions/workflows/ci.yml)
+[![Template Sync](https://github.com/se-thorbergr/SE-VIOS-DevFramework/actions/workflows/verify-templates-sync.yml/badge.svg)](https://github.com/se-thorbergr/SE-VIOS-DevFramework/actions/workflows/verify-templates-sync.yml)
 
 # SE-VIOS-DevFramework
 
@@ -17,6 +18,7 @@ Space Engineers **Programmable Block** framework for building **VIOS**-powered s
   - [Table of Contents](#table-of-contents)
   - [Features](#features)
   - [Repository Layout](#repository-layout)
+  - [Scaffold New PB/Mixin](#scaffold-new-pbmixin)
   - [Project Types (MDK²)](#project-types-mdk)
   - [Quick Start (VS Code / dotnet)](#quick-start-vs-code--dotnet)
   - [Build \& Package to Space Engineers](#build--package-to-space-engineers)
@@ -41,6 +43,7 @@ Space Engineers **Programmable Block** framework for building **VIOS**-powered s
 - **Messaging that just works**: local bus + IGC (unicast/multicast/broadcast)
 - **Config & save**: tweak via `Me.CustomData` (`MyIni`), persist via `Storage`
 - **Guardrails**: build/CI checks + architecture doc with Mermaid diagrams
+- **Template Sync gate**: CI verifies each PB/Mixin against our templates. Default **RELAXED** mode; add the PR label **`strict-template-sync`** to also run the **STRICT** lane (fails on `.csproj` drift). See **docs/policies/VIOS-Template-Sync-Policy.md**.
 
 > TL;DR: smoother ticks, cleaner code, happier grid.
 
@@ -64,12 +67,74 @@ Space Engineers **Programmable Block** framework for building **VIOS**-powered s
 │  └─ architecture/VIOS-Architecture.md
 │
 ├─ codex/                        # Seed tasks for AI‑assisted sessions
-├─ tools/                        # License stampers, doc validator
+├─ tools/                        # Scaffolders, verifiers, license stampers
 ├─ .githooks/                    # Pre‑commit header stamping
 └─ .github/                      # CI, issue & PR templates
 ```
 
 > Start with `docs/architecture/VIOS-Architecture.md` to see how the parts snap together.
+
+---
+
+## Scaffold New PB/Mixin
+
+> Use our scaffolders to create a new Git submodule and seed it from templates. Tokens `__NAME__` (project) and `__CLASS__` (mixin primary type) are replaced, and `// SCAFFOLD-STRIP` blocks are removed.
+
+**Bash (Linux/macOS/WSL/Git Bash)**
+
+```bash
+# PB script (preview)
+tools/scaffold-submodule.sh pbscript Scripts/MyScript https://github.com/you/MyScript.git MyScript --dry-run
+
+# PB script (create)
+tools/scaffold-submodule.sh pbscript Scripts/MyScript https://github.com/you/MyScript.git MyScript --sln SE-VIOS-DevFramework.sln --readme
+
+# Mixin (preview)
+tools/scaffold-submodule.sh mixin Mixins/Modules/Power https://github.com/you/Power.git Power --class PowerModule --dry-run
+
+# Mixin (create)
+tools/scaffold-submodule.sh mixin Mixins/Modules/Power https://github.com/you/Power.git Power --class PowerModule --sln SE-VIOS-DevFramework.sln --readme
+```
+
+**PowerShell (Windows / cross‑platform)**
+
+```powershell
+# PB script (preview)
+pwsh ./tools/Scaffold-Submodule.ps1 -Kind pbscript `
+  -DestPath Scripts/MyScript `
+  -RemoteUrl https://github.com/you/MyScript.git `
+  -ProjectName MyScript `
+  -DryRun
+
+# PB script (create)
+pwsh ./tools/Scaffold-Submodule.ps1 -Kind pbscript `
+  -DestPath Scripts/MyScript `
+  -RemoteUrl https://github.com/you/MyScript.git `
+  -ProjectName MyScript `
+  -Sln SE-VIOS-DevFramework.sln -Readme
+
+# Mixin (preview)
+pwsh ./tools/Scaffold-Submodule.ps1 -Kind mixin `
+  -DestPath Mixins/Modules/Power `
+  -RemoteUrl https://github.com/you/Power.git `
+  -ProjectName Power `
+  -ClassName PowerModule `
+  -DryRun
+
+# Mixin (create)
+pwsh ./tools/Scaffold-Submodule.ps1 -Kind mixin `
+  -DestPath Mixins/Modules/Power `
+  -RemoteUrl https://github.com/you/Power.git `
+  -ProjectName Power `
+  -ClassName PowerModule `
+  -Sln SE-VIOS-DevFramework.sln -Readme
+```
+
+**Expectations**
+
+- **PB Scripts**: template requires `Program.cs` with `public partial class Program : MyGridProgram`.
+- **Mixins**: filename freedom. At least one `.cs` must declare `partial class Program` (no visibility/base). Mixins **must not** inherit `MyGridProgram`.
+- First push from the submodule may be blocked by repo protections; scaffolding will still complete.
 
 ---
 
@@ -99,7 +164,7 @@ namespace IngameScript
 }
 ```
 
-> Rule of thumb: only the PB script inherits `MyGridProgram`. Mixins don’t.
+> **Rule of thumb:** only the PB script inherits `MyGridProgram`. **Mixins must not inherit `MyGridProgram`.**
 
 ---
 
@@ -121,7 +186,7 @@ code SE-VIOS-DevFramework.code-workspace
 dotnet build SE-VIOS-DevFramework.sln -c Release
 ```
 
-Packager will merge mixins and drop PB scripts into your SE local scripts folder (Windows) or Proton equivalent.
+Packager will merge mixins and drop PB scripts into your SE local scripts folder (Windows build host) or Proton equivalent.
 
 > Want the shortest runway? Tweak `Scripts/VIOS.Minimal/Program.cs`, build, paste into your PB, go.
 
@@ -130,6 +195,7 @@ Packager will merge mixins and drop PB scripts into your SE local scripts folder
 ## Build & Package to Space Engineers
 
 1. Wire modules in a PB script under **Scripts/** (e.g., register `PowerModule`, `ScreenManagerModule`).
+
 2. Build:
 
    ```bash
@@ -152,11 +218,14 @@ Tip: keep heavy scans in **coroutines**; the kernel/scheduler will keep you with
   Modules/components keep **neutral** names (`PowerModule`, `ScreenManagerModule`).
 - **Enclosure**: all code lives inside `namespace IngameScript { partial class Program { … } }`.
 
-More details live in `docs/architecture/VIOS-Architecture.md`.
+More details live in `docs/architecture/VIOS-Architecture.md` and **docs/policies/VIOS-Template-Sync-Policy.md**.
 
 ---
 
 ## Docs & Architecture
+
+- Canonical reference: `docs/architecture/VIOS-Architecture.md`
+- Template policy: `docs/policies/VIOS-Template-Sync-Policy.md`
 
 ### Validate Architecture Doc (headless‑friendly)
 
@@ -181,10 +250,15 @@ Prefer Docker? The validator will auto‑use the Mermaid‑CLI container if pres
 
 Pull up a chair, Engineer. We love PRs.
 
-- Read `CONTRIBUTING.md` and `docs/policies/VIOS-Branding-Extension-Policy.md`
-- Open issues with the templates under `.github/ISSUE_TEMPLATE/`
-- PRs must include the **Acceptance Checklist** (auto‑synced with the PR template)
-- New modules: keep names neutral (no `VIOS` in user module **type names**), implement `IVIOSModule`
+- Read `CONTRIBUTING.md`, `docs/policies/VIOS-Branding-Extension-Policy.md`, and `docs/policies/VIOS-Template-Sync-Policy.md`.
+- Open issues with the templates under `.github/ISSUE_TEMPLATE/`.
+- PRs must include the **Acceptance Checklist** (auto‑synced with the PR template).
+- New modules: keep names neutral (no `VIOS` in user module **type names**), implement `IVIOSModule`.
+
+**Template Sync in CI**
+
+- PRs run the verifiers in **RELAXED** mode as a required check.
+- Add label **`strict-template-sync`** to run the **STRICT** lane (semi‑static `.csproj` drift becomes fail), or use **Actions → Template Sync → Run workflow → `strict=true`**.
 
 **Starter bounties**: see `codex/tasks/` (T‑001 … T‑004) for bite‑sized work items.
 
@@ -256,7 +330,7 @@ In hot paths: please don’t. Tight loops + pooled buffers win.
 
 ## Credits
 
-- **Viking Industries** (VI) — “Thorbergr” (Steam)
+- **Viking Industries** (VI) — “Thorbergr” (Steam) / geho (Github)
 - MDK²‑SE by @malforge (package authors)
 
 ---
