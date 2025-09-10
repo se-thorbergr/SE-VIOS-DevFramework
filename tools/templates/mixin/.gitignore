@@ -16,3 +16,4 @@ ehthumbs.db
 *.tmp
 ~$*
 *~
+*.backup-*
