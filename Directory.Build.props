@@ -3,5 +3,7 @@
     <TargetFramework>netframework48</TargetFramework>
     <LangVersion>6</LangVersion>
     <RootNamespace>IngameScript</RootNamespace>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
   </PropertyGroup>
 </Project>
